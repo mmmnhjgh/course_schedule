@@ -1,17 +1,41 @@
-# course_schedule
+# 轻课表
 
-A new Flutter project.
+一款基于 Flutter 开发的纯本地、无广告 Android 课表应用，支持多源课表导入、智能三方合并与日常课程管理。
 
-## Getting Started
+## 核心功能
 
-This project is a starting point for a Flutter application.
+- **多维课表视图**：
+  - **周视图**：支持左右滑动切换周次、单双周过滤、隐藏周末（5 列/7 列切换）、本周红线时间指示、同格冲突课程角标与长按标记本周停课/请假。
+  - **今日课表**：自动计算当前周次与日期，展示正在上课剩余分钟数、下一节倒计时以及「明天预览」折叠列表。
+- **多源课表导入与分享**：
+  - **教务系统网页导入（WebView）**：内置全国高校教务索引搜索、页面自动探针、新版正方后台课表接口直拉（支持选学期）、强智同源 `iframe` 提取与未筛选周次重抓，以及通用 HTML 表格解析。
+  - **AI 一键转换**：内置提示词模板，复制提示词 + 课表文字/截图发给任意 AI，粘贴返回的 JSON 即可同时导入课程、开学日期与作息时间表。
+  - **文件导入**：支持 `.xlsx`（Excel）、`.csv`、`.ics`（日历文件）与 `.json` 备份文件。
+  - **分享与备份**：支持导出标准 `.ics` 日历文件通过系统分享发送给同学或导入系统日历，支持 JSON 一键备份导出与恢复。
+- **智能三方合并**：重复导入新课表时自动比对「新增 / 更新 / 保留手动修改 / 仅旧表存在」，保护手动添加的课程和已修改过的字段不被覆盖。
+- **多课表与个性化**：支持多张课表档案切换、自定义每天节数（8~16 节）及每节课上下课时间、自定义主题强调色与浅色/深色模式。
 
-A few resources to get you started if this is your first Flutter project:
+## 本地开发与验证
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```powershell
+# 安装依赖
+flutter pub get
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+# 静态代码检查
+dart analyze
+
+# 运行全部单元与组件测试
+flutter test
+
+# 在安卓设备或模拟器上调试运行
+flutter run
+
+# 本地构建 Release 安装包
+flutter build apk --release
+```
+
+## GitHub Actions 自动构建
+
+本项目已配置 [.github/workflows/build.yml](.github/workflows/build.yml)：
+- 每次推送代码到 `main` 分支，或在 GitHub 页面手动触发构建时，自动执行 `dart analyze`、`flutter test` 并打包 APK 上传至 Actions Artifacts。
+- 当推送 `v*` 格式的版本标签（例如 `git tag v2.0.0 && git push origin v2.0.0`）时，自动创建 GitHub Release 并附带安装包下载。

@@ -1,0 +1,71 @@
+name: 构建与发布 Android APK
+
+# 1. 触发时机：推送到 main 分支、推送 v 开头版本标签，或网页手动点击运行
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# 允许自动创建 Release 并上传附件
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: 检查、测试并打包 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 第 1 步：拉取仓库最新源码
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      # 第 2 步：配置 Java 21（Android Gradle Plugin 9.x 需要 JDK 17/21）
+      - name: 配置 Java 环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      # 第 3 步：安装并缓存与本地一致的 Flutter 3.50.1
+      - name: 安装 Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.50.1'
+          channel: 'stable'
+          cache: true
+
+      # 第 4 步：下载 Dart/Flutter 依赖包
+      - name: 获取项目依赖
+        run: flutter pub get
+
+      # 第 5 步：静态检查（有错误直接终止，避免带着 Bug 打包）
+      - name: 静态代码分析
+        run: dart analyze
+
+      # 第 6 步：运行全部单元与组件测试
+      - name: 运行自动化测试
+        run: flutter test
+
+      # 第 7 步：编译正式版安卓 APK
+      - name: 打包 Release APK
+        run: flutter build apk --release
+
+      # 第 8 步：将编好的 APK 保存到本次构建产物（Artifacts）供下载
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: course_schedule-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+
+      # 第 9 步：如果本次推送的是 v* 标签（如 v2.0.0），自动发布到 Releases 页面
+      - name: 自动创建 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
+          generate_release_notes: true
