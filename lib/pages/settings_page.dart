@@ -16,7 +16,7 @@ class SettingsPage extends StatelessWidget {
   final ValueChanged<String> onRenameActiveProfile;
   final VoidCallback onDeleteActiveProfile;
   final ValueChanged<ScheduleConfig> onUpdateConfig;
-  final Future<void> Function(String widgetType) onRequestPinWidget;
+  final Future<bool> Function(String widgetType) onRequestPinWidget;
   final VoidCallback onOpenWebImport;
   final VoidCallback onOpenAiImport;
   final VoidCallback onImportFile;
@@ -316,70 +316,94 @@ class SettingsPage extends StatelessWidget {
   }
 
   void _showDesktopWidgetSheet(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    var requesting = false;
+    String? requestMessage;
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       showDragHandle: true,
-      builder: (sheetCtx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '添加桌面小组件',
-                style: Theme.of(sheetCtx)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '自动随当前课表更新，优先展示尚未下课的课程，点击卡片直达「今日」页面。',
-                style: Theme.of(sheetCtx).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: 14),
-              Row(
+      builder: (_) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          Future<void> requestPin(String type) async {
+            if (requesting) return;
+            setSheetState(() {
+              requesting = true;
+              requestMessage = '正在向系统桌面发送添加请求…';
+            });
+            final requested = await onRequestPinWidget(type);
+            if (!sheetContext.mounted) return;
+            setSheetState(() {
+              requesting = false;
+              requestMessage = requested
+                  ? '已发送添加请求。请在系统弹窗中确认。若没有弹窗，可以手动添加。'
+                  : '一键添加暂不可用，可以手动添加。';
+            });
+          }
+
+          final theme = Theme.of(sheetContext);
+          final message = requestMessage;
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: _WidgetPreviewOptionCard(
-                      title: '今日课表 4×2 宽卡',
-                      subtitle: '日期周次 + 最多 4 门课网格',
-                      badge: '4×2',
-                      onTap: () {
-                        Navigator.of(sheetCtx).pop();
-                        onRequestPinWidget('wide');
-                      },
+                  Text(
+                    '添加桌面小组件',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _WidgetPreviewOptionCard(
-                      title: '今日课表 2×2 小卡',
-                      subtitle: '当前/下节展开 + 紧接课程',
-                      badge: '2×2',
-                      onTap: () {
-                        Navigator.of(sheetCtx).pop();
-                        onRequestPinWidget('compact');
-                      },
+                  const SizedBox(height: 6),
+                  Text(
+                    '自动随当前课表更新，优先展示尚未下课的课程，点击卡片直达「今日」页面。',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _WidgetPreviewOptionCard(
+                          title: '今日课表 4×2 宽卡',
+                          subtitle: '日期周次 + 最多 4 门课网格',
+                          badge: '4×2',
+                          onTap: requesting ? null : () => requestPin('wide'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _WidgetPreviewOptionCard(
+                          title: '今日课表 2×2 小卡',
+                          subtitle: '当前/下节展开 + 紧接课程',
+                          badge: '2×2',
+                          onTap: requesting ? null : () => requestPin('compact'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (message != null) ...[
+                    const SizedBox(height: 12),
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(message, style: theme.textTheme.bodyMedium),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Text(
+                    '手动添加时，长按或双指捏合桌面空白处，进入「小组件」或「插件」，找到「轻课表」。'
+                    '如果进入 OPPO 或一加的「卡片中心」，将「全部卡片」滑到底，再点「插件」。',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              Text(
-                '提示：如部分系统桌面拦截一键添加弹窗，也可长按桌面空白处 → 小组件 → 找到「轻课表」手动添加。',
-                style: Theme.of(sheetCtx).textTheme.bodySmall?.copyWith(
-                      fontSize: 11.5,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -602,7 +626,7 @@ class SettingsPage extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('关于轻课表'),
-            subtitle: const Text('v2.0.0 · 纯本地无广告课表应用'),
+            subtitle: const Text('v2.0.1 · 纯本地无广告课表应用'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showAboutDialog(context),
           ),
@@ -649,7 +673,7 @@ class SettingsPage extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '版本 v2.0.0',
+              '版本 v2.0.1',
               style: Theme.of(dialogCtx).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -714,7 +738,7 @@ class _WidgetPreviewOptionCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final String badge;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _WidgetPreviewOptionCard({
     required this.title,

@@ -2,7 +2,7 @@ name: course_schedule
 description: "轻课表 - 纯本地、支持多源导入的 Flutter 安卓课表应用"
 publish_to: 'none' # 私有应用，不发布到 pub.dev
 
-version: 2.0.0+2
+version: 2.0.1+3
 
 environment:
   sdk: ^3.14.0

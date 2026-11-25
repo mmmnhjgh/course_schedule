@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,7 @@ import 'package:course_schedule/main.dart';
 import 'package:course_schedule/models/course.dart';
 import 'package:course_schedule/models/schedule_config.dart';
 import 'package:course_schedule/models/schedule_profile.dart';
+import 'package:course_schedule/pages/settings_page.dart';
 import 'package:course_schedule/services/storage_service.dart';
 import 'package:course_schedule/services/web_parser_service.dart';
 import 'package:course_schedule/services/widget_sync_service.dart';
@@ -171,6 +173,70 @@ void main() {
     expect(find.text('今日'), findsOneWidget);
     expect(find.text('周课表'), findsOneWidget);
     expect(find.text('设置'), findsOneWidget);
+  });
+
+  testWidgets('Desktop widget picker keeps manual instructions after a request',
+      (tester) async {
+    final profile = ScheduleProfile(
+      id: 'profile',
+      name: '测试课表',
+      config: ScheduleConfig.defaults(),
+      courses: const [],
+    );
+    final wideRequest = Completer<bool>();
+    final requests = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsPage(
+          profiles: [profile],
+          activeProfile: profile,
+          onSwitchProfile: (_) {},
+          onCreateProfile: (_) {},
+          onRenameActiveProfile: (_) {},
+          onDeleteActiveProfile: () {},
+          onUpdateConfig: (_) {},
+          onRequestPinWidget: (type) {
+            requests.add(type);
+            return type == 'wide' ? wideRequest.future : Future.value(false);
+          },
+          onOpenWebImport: () {},
+          onOpenAiImport: () {},
+          onImportFile: () {},
+          onExportIcsShare: () {},
+          onExportJson: () => '',
+          onImportJson: (_) {},
+          onLoadSampleCourses: () {},
+          onClearAllCourses: () {},
+        ),
+      ),
+    );
+
+    final entry = find.text('桌面小组件');
+    await tester.scrollUntilVisible(entry, 180);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+
+    final instructions = find.textContaining('将「全部卡片」滑到底，再点「插件」');
+    final wideCard = find.text('今日课表 4×2 宽卡');
+    final compactCard = find.text('今日课表 2×2 小卡');
+    expect(instructions, findsOneWidget);
+
+    await tester.tap(wideCard);
+    await tester.pump();
+    expect(find.textContaining('正在向系统桌面发送'), findsOneWidget);
+    await tester.tap(compactCard);
+    expect(requests, ['wide']);
+
+    wideRequest.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已发送添加请求'), findsOneWidget);
+    expect(instructions, findsOneWidget);
+
+    await tester.tap(compactCard);
+    await tester.pumpAndSettle();
+    expect(requests, ['wide', 'compact']);
+    expect(find.textContaining('一键添加暂不可用'), findsOneWidget);
+    expect(instructions, findsOneWidget);
   });
 
   test('WidgetSyncService builds complete Android widget JSON payload', () {

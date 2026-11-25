@@ -61,7 +61,7 @@ class WidgetSyncService {
     }
   }
 
-  /// 请求系统弹出「添加小组件到桌面」确认弹窗（widgetType: 'wide' 或 'compact'）
+  /// 向系统桌面发出添加请求。返回值表示请求是否已发送，小组件由桌面添加。
   static Future<bool> requestPinWidget(String widgetType) async {
     if (!_isAndroid) return false;
     try {

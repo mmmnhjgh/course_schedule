@@ -16,7 +16,8 @@
 - **Android 原生桌面小组件**：
   - **4×2 今日宽卡**：展示今日日期、周次、总节数及 2×2 淡彩课程卡片网格（含左侧彩色竖条、时间与教室）。
   - **2×2 今日小卡**：紧凑展示当前或下一节展开信息及紧接课程。
-  - 支持课表修改即时同步、跨天自动切换、课后智能前推未结束课程、浅色/深色模式自动适配，以及「设置 → 桌面小组件」一键添加到桌面。
+  - 支持课表修改即时同步、跨天自动切换、课后智能前推未结束课程、浅色/深色模式自动适配，以及从「设置 → 桌面小组件」发起桌面添加请求。
+  - 在 OPPO 或一加手机上，双指捏合桌面进入编辑模式。如果打开了「卡片中心」，将「全部卡片」滑到底，再通过「插件」选择「轻课表」。
 - **多源课表导入与分享**：
   - **教务系统网页导入（WebView）**：内置全国高校教务索引搜索、页面自动探针、新版正方后台课表接口直拉（自动选中当前学年学期）、强智同源 `iframe` 提取与未筛选周次重抓，以及支持嵌套表格的通用 HTML 表格解析。
   - **AI 一键转换**：内置提示词模板，复制提示词 + 课表文字/截图发给任意 AI，粘贴返回的 JSON 即可同时导入课程、开学日期与作息时间表。
@@ -57,7 +58,7 @@ flutter build apk --release --split-per-abi
 ## 正式版签名配置
 
 - **本地签名**：复制 [android/key.properties.example](android/key.properties.example) 为 `android/key.properties`（已被 `.gitignore` 忽略，切勿提交到仓库），填入你的 `.jks` 签名证书路径与密码即可。
-- **GitHub Actions 自动签名发布**：在仓库 **Settings → Secrets and variables → Actions** 中配置以下 4 个 Secrets 后，推送 `v*` 标签（例如 `git tag v2.0.0 && git push origin v2.0.0`）即可自动构建已签名正式包并发布到 GitHub Releases：
+- **GitHub Actions 自动签名发布**：在仓库 **Settings → Secrets and variables → Actions** 中配置以下 4 个 Secrets 后，推送与新版本对应的 `v*` 标签，即可构建已签名正式包并发布到 GitHub Releases：
   - `ANDROID_KEYSTORE_BASE64`（`.jks` 文件的 Base64 编码）
   - `ANDROID_KEYSTORE_PASSWORD`
   - `ANDROID_KEY_ALIAS`

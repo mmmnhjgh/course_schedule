@@ -79,17 +79,10 @@ class _HomePageState extends State<HomePage> {
     await WidgetSyncService.syncProfile(_activeProfile);
   }
 
-  Future<void> _requestPinWidget(String type) async {
+  Future<bool> _requestPinWidget(String type) async {
     await WidgetSyncService.syncProfile(_activeProfile);
-    final ok = await WidgetSyncService.requestPinWidget(type);
-    if (!mounted) return;
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('请长按手机桌面空白处 → 添加小组件 → 找到「轻课表」添加'),
-        ),
-      );
-    }
+    if (!mounted) return false;
+    return WidgetSyncService.requestPinWidget(type);
   }
 
   void _replaceActiveProfile(ScheduleProfile updated) {
