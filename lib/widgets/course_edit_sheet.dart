@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../models/course.dart';
+import '../models/schedule_config.dart';
 
 /// 供选择的课程卡片颜色预设
 const List<int> kCourseColorPresets = [
@@ -24,6 +25,7 @@ Future<CourseEditResult?> showCourseEditSheet(
   int initialStartSection = 1,
   required int totalWeeks,
   required int maxSections,
+  List<SectionTime> sectionTimes = const [],
 }) {
   return showModalBottomSheet<CourseEditResult>(
     context: context,
@@ -36,6 +38,7 @@ Future<CourseEditResult?> showCourseEditSheet(
       initialStartSection: initialStartSection,
       totalWeeks: totalWeeks,
       maxSections: maxSections,
+      sectionTimes: sectionTimes,
     ),
   );
 }
@@ -57,6 +60,7 @@ class _CourseEditSheet extends StatefulWidget {
   final int initialStartSection;
   final int totalWeeks;
   final int maxSections;
+  final List<SectionTime> sectionTimes;
 
   const _CourseEditSheet({
     this.initialCourse,
@@ -64,6 +68,7 @@ class _CourseEditSheet extends StatefulWidget {
     required this.initialStartSection,
     required this.totalWeeks,
     required this.maxSections,
+    required this.sectionTimes,
   });
 
   @override
@@ -140,6 +145,38 @@ class _CourseEditSheetState extends State<_CourseEditSheet> {
     });
   }
 
+  String _formatWeeksSummary() {
+    if (_selectedWeeks.isEmpty) return '未选择';
+    final temp = Course(
+      id: '',
+      name: '',
+      weekday: _weekday,
+      startSection: _startSection,
+      sectionCount: _sectionCount,
+      weeks: _selectedWeeks.toList()..sort(),
+      colorValue: _colorValue,
+    );
+    return temp.formatWeeks();
+  }
+
+  String _formatTimePreview() {
+    final endSection = _startSection + _sectionCount - 1;
+    final dayLabel = _weekdayLabels[(_weekday - 1).clamp(0, 6)];
+    final sectionLabel = _startSection == endSection
+        ? '第 $_startSection 节'
+        : '第 $_startSection-$endSection 节';
+
+    final times = widget.sectionTimes;
+    if (times.isNotEmpty &&
+        _startSection - 1 < times.length &&
+        endSection - 1 < times.length) {
+      final startClock = times[_startSection - 1].start;
+      final endClock = times[endSection - 1].end;
+      return '$dayLabel $sectionLabel · $startClock - $endClock';
+    }
+    return '$dayLabel $sectionLabel';
+  }
+
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedWeeks.isEmpty) {
@@ -172,250 +209,654 @@ class _CourseEditSheetState extends State<_CourseEditSheet> {
     Navigator.of(context).pop(CourseEditResult.save(course));
   }
 
+  InputDecoration _fieldDecoration(
+    BuildContext context, {
+    required String label,
+    String? hint,
+    IconData? icon,
+    EdgeInsetsGeometry? contentPadding,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: icon != null ? Icon(icon, size: 19) : null,
+      filled: true,
+      fillColor: colorScheme.surface,
+      isDense: true,
+      contentPadding: contentPadding ??
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: colorScheme.outlineVariant),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.7),
+        ),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: colorScheme.primary, width: 1.6),
+      ),
+    );
+  }
+
+  Widget _buildSectionCard(BuildContext context, {required Widget child}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      child: child,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final maxHeight = MediaQuery.of(context).size.height * 0.90;
     final maxCountForStart = widget.maxSections - _startSection + 1;
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + bottomInset),
-      child: SingleChildScrollView(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    _isEditing ? '编辑课程' : '添加课程',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const Spacer(),
-                  if (_isEditing)
-                    TextButton.icon(
-                      onPressed: () => Navigator.of(context)
-                          .pop(const CourseEditResult.delete()),
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      label: const Text(
-                        '删除',
-                        style: TextStyle(color: Colors.red),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: SafeArea(
+          top: false,
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 固定顶栏
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: Color(_colorValue),
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: '课程名称 *',
-                  hintText: '例如：高等数学',
-                  border: OutlineInputBorder(),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isEditing ? '编辑课程' : '添加课程',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const Spacer(),
+                      if (_isEditing)
+                        TextButton.icon(
+                          onPressed: () => Navigator.of(context)
+                              .pop(const CourseEditResult.delete()),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                          ),
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                            size: 19,
+                          ),
+                          label: const Text(
+                            '删除',
+                            style: TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      IconButton(
+                        tooltip: '关闭',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close, size: 22),
+                      ),
+                    ],
+                  ),
                 ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return '请输入课程名称';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _locationController,
-                      decoration: const InputDecoration(
-                        labelText: '教室',
-                        hintText: '如 教A-302',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _teacherController,
-                      decoration: const InputDecoration(
-                        labelText: '老师',
-                        hintText: '选填',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _noteController,
-                decoration: const InputDecoration(
-                  labelText: '备注',
-                  hintText: '如考核方式、课程群号等（选填）',
-                  border: OutlineInputBorder(),
+                Divider(
+                  height: 1,
+                  color: colorScheme.outlineVariant.withValues(alpha: 0.5),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<int>(
-                      initialValue: _weekday,
-                      decoration: const InputDecoration(
-                        labelText: '星期',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: List.generate(7, (i) {
-                        return DropdownMenuItem(
-                          value: i + 1,
-                          child: Text(_weekdayLabels[i]),
-                        );
-                      }),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _weekday = v);
-                      },
+
+                // 中间可滚动表单
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 1. 基本信息分组
+                        _buildSectionCard(
+                          context,
+                          child: Column(
+                            children: [
+                              TextFormField(
+                                controller: _nameController,
+                                decoration: _fieldDecoration(
+                                  context,
+                                  label: '课程名称 *',
+                                  hint: '例如：高等数学',
+                                  icon: Icons.menu_book_outlined,
+                                ),
+                                validator: (value) {
+                                  if (value == null || value.trim().isEmpty) {
+                                    return '请输入课程名称';
+                                  }
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextFormField(
+                                      controller: _locationController,
+                                      decoration: _fieldDecoration(
+                                        context,
+                                        label: '教室',
+                                        hint: '如 教A-302',
+                                        icon: Icons.location_on_outlined,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: TextFormField(
+                                      controller: _teacherController,
+                                      decoration: _fieldDecoration(
+                                        context,
+                                        label: '老师',
+                                        hint: '选填',
+                                        icon: Icons.person_outline,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // 2. 上课时间分组（含实时时间预览）
+                        _buildSectionCard(
+                          context,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    flex: 3,
+                                    child: DropdownButtonFormField<int>(
+                                      initialValue: _weekday,
+                                      isExpanded: true,
+                                      decoration: _fieldDecoration(
+                                        context,
+                                        label: '星期',
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                      items: List.generate(7, (i) {
+                                        return DropdownMenuItem(
+                                          value: i + 1,
+                                          child: Text(
+                                            _weekdayLabels[i],
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        );
+                                      }),
+                                      onChanged: (v) {
+                                        if (v != null) {
+                                          setState(() => _weekday = v);
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    flex: 4,
+                                    child: DropdownButtonFormField<int>(
+                                      initialValue: _startSection,
+                                      isExpanded: true,
+                                      decoration: _fieldDecoration(
+                                        context,
+                                        label: '开始节次',
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                      items: List.generate(
+                                        widget.maxSections,
+                                        (i) {
+                                          final sec = i + 1;
+                                          return DropdownMenuItem(
+                                            value: sec,
+                                            child: Text(
+                                              '第 $sec 节',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                      onChanged: (v) {
+                                        if (v != null) {
+                                          setState(() {
+                                            _startSection = v;
+                                            final newMax =
+                                                widget.maxSections -
+                                                    _startSection +
+                                                    1;
+                                            if (_sectionCount > newMax) {
+                                              _sectionCount = newMax;
+                                            }
+                                          });
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    flex: 3,
+                                    child: DropdownButtonFormField<int>(
+                                      initialValue: _sectionCount,
+                                      isExpanded: true,
+                                      decoration: _fieldDecoration(
+                                        context,
+                                        label: '连上节数',
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                      items: List.generate(
+                                        maxCountForStart.clamp(1, 6),
+                                        (i) {
+                                          final count = i + 1;
+                                          return DropdownMenuItem(
+                                            value: count,
+                                            child: Text(
+                                              '$count 节',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                      onChanged: (v) {
+                                        if (v != null) {
+                                          setState(() => _sectionCount = v);
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.primaryContainer
+                                      .withValues(alpha: 0.45),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.schedule,
+                                      size: 14,
+                                      color: colorScheme.primary,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _formatTimePreview(),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: colorScheme.onPrimaryContainer,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // 3. 上课周次分组（5 列等宽紧凑数字网格）
+                        _buildSectionCard(
+                          context,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    '上课周次',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _formatWeeksSummary(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: _selectedWeeks.isEmpty
+                                            ? colorScheme.error
+                                            : colorScheme.primary,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                  _PresetChipButton(
+                                    label: '全选',
+                                    onTap: () => _selectWeeksPreset('all'),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  _PresetChipButton(
+                                    label: '单周',
+                                    onTap: () => _selectWeeksPreset('odd'),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  _PresetChipButton(
+                                    label: '双周',
+                                    onTap: () => _selectWeeksPreset('even'),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  _PresetChipButton(
+                                    label: '清空',
+                                    onTap: () => _selectWeeksPreset('clear'),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              _WeekGridPicker(
+                                totalWeeks: widget.totalWeeks,
+                                selectedWeeks: _selectedWeeks,
+                                onToggle: (week) {
+                                  setState(() {
+                                    if (_selectedWeeks.contains(week)) {
+                                      _selectedWeeks.remove(week);
+                                    } else {
+                                      _selectedWeeks.add(week);
+                                    }
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // 4. 卡片颜色（单行 10 色紧凑对齐）
+                        _buildSectionCard(
+                          context,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '卡片颜色',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 10),
+                              _ColorPalettePicker(
+                                selectedColor: _colorValue,
+                                onSelect: (hex) =>
+                                    setState(() => _colorValue = hex),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // 5. 备注（移至次要位置）
+                        _buildSectionCard(
+                          context,
+                          child: TextFormField(
+                            controller: _noteController,
+                            decoration: _fieldDecoration(
+                              context,
+                              label: '备注（选填）',
+                              hint: '如考核方式、课程群号等',
+                              icon: Icons.notes_outlined,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: DropdownButtonFormField<int>(
-                      initialValue: _startSection,
-                      decoration: const InputDecoration(
-                        labelText: '开始节次',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: List.generate(widget.maxSections, (i) {
-                        final sec = i + 1;
-                        return DropdownMenuItem(
-                          value: sec,
-                          child: Text('第 $sec 节'),
-                        );
-                      }),
-                      onChanged: (v) {
-                        if (v != null) {
-                          setState(() {
-                            _startSection = v;
-                            final newMax = widget.maxSections - _startSection + 1;
-                            if (_sectionCount > newMax) {
-                              _sectionCount = newMax;
-                            }
-                          });
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: DropdownButtonFormField<int>(
-                      initialValue: _sectionCount,
-                      decoration: const InputDecoration(
-                        labelText: '连上节数',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: List.generate(maxCountForStart.clamp(1, 6), (i) {
-                        final count = i + 1;
-                        return DropdownMenuItem(
-                          value: count,
-                          child: Text('$count 节'),
-                        );
-                      }),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _sectionCount = v);
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Text(
-                    '上课周次',
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () => _selectWeeksPreset('all'),
-                    child: const Text('全选'),
-                  ),
-                  TextButton(
-                    onPressed: () => _selectWeeksPreset('odd'),
-                    child: const Text('单周'),
-                  ),
-                  TextButton(
-                    onPressed: () => _selectWeeksPreset('even'),
-                    child: const Text('双周'),
-                  ),
-                  TextButton(
-                    onPressed: () => _selectWeeksPreset('clear'),
-                    child: const Text('清空'),
-                  ),
-                ],
-              ),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: List.generate(widget.totalWeeks, (i) {
-                  final week = i + 1;
-                  final selected = _selectedWeeks.contains(week);
-                  return FilterChip(
-                    label: Text('$week'),
-                    selected: selected,
-                    visualDensity: VisualDensity.compact,
-                    onSelected: (isOn) {
-                      setState(() {
-                        if (isOn) {
-                          _selectedWeeks.add(week);
-                        } else {
-                          _selectedWeeks.remove(week);
-                        }
-                      });
-                    },
-                  );
-                }),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                '卡片颜色',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: kCourseColorPresets.map((colorHex) {
-                  final isSelected = _colorValue == colorHex;
-                  return GestureDetector(
-                    onTap: () => setState(() => _colorValue = colorHex),
-                    child: Container(
-                      width: 30,
-                      height: 30,
-                      decoration: BoxDecoration(
-                        color: Color(colorHex),
-                        shape: BoxShape.circle,
-                        border: isSelected
-                            ? Border.all(color: Colors.black87, width: 2.5)
-                            : null,
-                      ),
-                      child: isSelected
-                          ? const Icon(Icons.check, color: Colors.white, size: 18)
-                          : null,
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _submit,
-                  child: Text(_isEditing ? '保存修改' : '确认添加'),
                 ),
-              ),
-            ],
+
+                // 吸底操作栏
+                Divider(
+                  height: 1,
+                  color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: FilledButton(
+                      onPressed: _submit,
+                      style: FilledButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        _isEditing ? '保存修改' : '确认添加',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PresetChipButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _PresetChipButton({
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.7),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w500,
+            color: colorScheme.primary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WeekGridPicker extends StatelessWidget {
+  final int totalWeeks;
+  final Set<int> selectedWeeks;
+  final ValueChanged<int> onToggle;
+
+  const _WeekGridPicker({
+    required this.totalWeeks,
+    required this.selectedWeeks,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: totalWeeks,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 5,
+        mainAxisSpacing: 6,
+        crossAxisSpacing: 6,
+        childAspectRatio: 2.25,
+      ),
+      itemBuilder: (context, index) {
+        final week = index + 1;
+        final isSelected = selectedWeeks.contains(week);
+        return InkWell(
+          onTap: () => onToggle(week),
+          borderRadius: BorderRadius.circular(8),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isSelected ? colorScheme.primary : colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isSelected
+                    ? colorScheme.primary
+                    : colorScheme.outlineVariant.withValues(alpha: 0.75),
+              ),
+            ),
+            child: Text(
+              '$week',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected
+                    ? colorScheme.onPrimary
+                    : colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ColorPalettePicker extends StatelessWidget {
+  final int selectedColor;
+  final ValueChanged<int> onSelect;
+
+  const _ColorPalettePicker({
+    required this.selectedColor,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final items = kCourseColorPresets.map((colorHex) {
+          final isSelected = selectedColor == colorHex;
+          return GestureDetector(
+            onTap: () => onSelect(colorHex),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: Color(colorHex),
+                shape: BoxShape.circle,
+                border: isSelected
+                    ? Border.all(color: colorScheme.onSurface, width: 2.2)
+                    : null,
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: Color(colorHex).withValues(alpha: 0.45),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: isSelected
+                  ? const Icon(Icons.check, color: Colors.white, size: 15)
+                  : null,
+            ),
+          );
+        }).toList();
+
+        if (constraints.maxWidth >= 290) {
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: items,
+          );
+        }
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (var i = 0; i < items.length; i++) ...[
+                if (i > 0) const SizedBox(width: 8),
+                items[i],
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

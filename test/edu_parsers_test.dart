@@ -108,4 +108,54 @@ void main() {
     expect(res.courses.first.location, '主楼405');
     expect(res.courses.first.teacher, '陈老师');
   });
+
+  test('EduParsers splits <p>/<div> blocks and inline teacher/location labels',
+      () {
+    const html = '''
+<table>
+  <tr><th>节次</th><th>星期一</th><th>星期二</th><th>星期三</th><th>星期四</th><th>星期五</th></tr>
+  <tr>
+    <td>1-2节</td>
+    <td><p>金融学</p><p>教师：王老师</p><p>地点：教A-203</p><p>1-16周</p></td>
+    <td><div>大学语文教师：李老师</div><div>1-16周</div><div>文科楼101</div></td>
+    <td></td><td></td><td></td>
+  </tr>
+</table>
+''';
+
+    final res = EduParsers.parseGenericHtmlTable(html);
+    expect(res.courses.length, 2);
+    expect(res.courses[0].name, '金融学');
+    expect(res.courses[0].teacher, '王老师');
+    expect(res.courses[0].location, '教A-203');
+    expect(res.courses[1].name, '大学语文');
+    expect(res.courses[1].teacher, '李老师');
+    expect(res.courses[1].location, '文科楼101');
+  });
+
+  test('EduParsers preserves rows after nested <table> inside a timetable cell',
+      () {
+    const html = '''
+<table>
+  <tr><th>节次</th><th>星期一</th><th>星期二</th><th>星期三</th><th>星期四</th><th>星期五</th></tr>
+  <tr>
+    <td>1-2节</td>
+    <td><p>模拟电子技术</p><table><tr><td>子表</td></tr></table><p>(1-2节)1-17周</p></td>
+    <td></td><td></td><td></td><td></td>
+  </tr>
+  <tr>
+    <td>3-4节</td>
+    <td></td>
+    <td><p>信号与系统</p><p>(3-4节)1-16周</p><p>信息楼201</p><p>张老师</p></td>
+    <td></td><td></td><td></td>
+  </tr>
+</table>
+''';
+
+    final res = EduParsers.parseGenericHtmlTable(html);
+    expect(res.courses.length, 2);
+    expect(res.courses[1].name, '信号与系统');
+    expect(res.courses[1].startSection, 3);
+    expect(res.courses[1].endSection, 4);
+  });
 }

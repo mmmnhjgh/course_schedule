@@ -7,6 +7,7 @@ import '../services/ai_import_service.dart';
 import '../services/file_import_service.dart';
 import '../services/import_merge_service.dart';
 import '../services/storage_service.dart';
+import '../services/widget_sync_service.dart';
 import '../widgets/course_detail_sheet.dart';
 import '../widgets/course_edit_sheet.dart';
 import '../widgets/import_preview_sheet.dart';
@@ -45,19 +46,29 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetSyncService.setOnOpenTabListener((tab) {
+      if (mounted && tab >= 0 && tab <= 2) {
+        setState(() => _tabIndex = tab);
+      }
+    });
     _loadData();
   }
 
   Future<void> _loadData() async {
     final loaded = await _storage.loadAllProfiles();
+    final initialTab = await WidgetSyncService.consumeInitialTab();
     if (!mounted) return;
     setState(() {
       _profiles = loaded.profiles;
       _activeProfileId = loaded.activeId;
+      if (initialTab != null && initialTab >= 0 && initialTab <= 2) {
+        _tabIndex = initialTab;
+      }
       _isLoading = false;
     });
     final cfg = _activeProfile.config;
     widget.onAppearanceChanged(cfg.themeColorValue, cfg.themeMode);
+    await WidgetSyncService.syncProfile(_activeProfile);
   }
 
   Future<void> _persistProfiles() async {
@@ -65,6 +76,20 @@ class _HomePageState extends State<HomePage> {
       profiles: _profiles,
       activeId: _activeProfileId,
     );
+    await WidgetSyncService.syncProfile(_activeProfile);
+  }
+
+  Future<void> _requestPinWidget(String type) async {
+    await WidgetSyncService.syncProfile(_activeProfile);
+    final ok = await WidgetSyncService.requestPinWidget(type);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('请长按手机桌面空白处 → 添加小组件 → 找到「轻课表」添加'),
+        ),
+      );
+    }
   }
 
   void _replaceActiveProfile(ScheduleProfile updated) {
@@ -181,6 +206,7 @@ class _HomePageState extends State<HomePage> {
       initialStartSection: startSection,
       totalWeeks: _activeProfile.config.totalWeeks,
       maxSections: _activeProfile.config.maxSections,
+      sectionTimes: _activeProfile.config.sectionTimes,
     );
     if (result == null) return;
 
@@ -525,6 +551,7 @@ class _HomePageState extends State<HomePage> {
         onRenameActiveProfile: _renameActiveProfile,
         onDeleteActiveProfile: _deleteActiveProfile,
         onUpdateConfig: _updateConfig,
+        onRequestPinWidget: _requestPinWidget,
         onOpenWebImport: _openWebImport,
         onOpenAiImport: _openAiImport,
         onImportFile: _importFromFile,

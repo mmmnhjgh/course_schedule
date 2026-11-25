@@ -32,3 +32,4 @@ flutter:
 
   assets:
     - assets/schools.json
+    - assets/app_icon.png

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_card_bg">#1F2127</color>
+    <color name="widget_card_stroke">#20FFFFFF</color>
+    <color name="widget_text_primary">#F1F3F7</color>
+    <color name="widget_text_secondary">#9BA2B0</color>
+    <color name="widget_preview_item_blue">#252F3E</color>
+    <color name="widget_preview_item_teal">#213332</color>
+    <color name="widget_preview_item_indigo">#282B3E</color>
+    <color name="widget_preview_item_red">#3B262A</color>
+</resources>

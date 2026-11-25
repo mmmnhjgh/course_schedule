@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_wide_label">今日课表（4×2 宽卡）</string>
+    <string name="widget_wide_desc">展示今日日期、周次与最多 4 门课程安排</string>
+    <string name="widget_compact_label">今日课表（2×2 小卡）</string>
+    <string name="widget_compact_desc">紧凑展示当前或下节课的上课时间与教室</string>
+</resources>

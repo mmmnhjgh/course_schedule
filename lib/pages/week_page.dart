@@ -30,8 +30,8 @@ class _WeekPageState extends State<WeekPage> {
   late PageController _pageController;
   bool _showNonCurrentWeek = false;
 
-  static const double _sectionHeight = 62.0;
-  static const double _timeColumnWidth = 44.0;
+  static const double _sectionHeight = 64.0;
+  static const double _timeColumnWidth = 36.0;
   static const _weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
 
   @override
@@ -183,51 +183,68 @@ class _WeekPageState extends State<WeekPage> {
 
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 8,
+        titleSpacing: 4,
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
               icon: const Icon(Icons.chevron_left),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 36),
+              visualDensity: VisualDensity.compact,
               onPressed: _selectedWeek > 1
                   ? () => _jumpToWeek(_selectedWeek - 1)
                   : null,
             ),
-            InkWell(
-              onTap: _pickWeek,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '第 $_selectedWeek 周',
-                          style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
+            Flexible(
+              child: InkWell(
+                onTap: _pickWeek,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              '第 $_selectedWeek 周',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
-                        ),
-                        const Icon(Icons.arrow_drop_down, size: 20),
-                      ],
-                    ),
-                    Text(
-                      _selectedWeek == currentWeek ? '本周' : '非本周（点此切回）',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: _selectedWeek == currentWeek
-                            ? colorScheme.primary
-                            : colorScheme.error,
+                          const Icon(Icons.arrow_drop_down, size: 18),
+                        ],
                       ),
-                    ),
-                  ],
+                      Text(
+                        _selectedWeek == currentWeek ? '本周' : '非本周',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: _selectedWeek == currentWeek
+                              ? colorScheme.primary
+                              : colorScheme.error,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.chevron_right),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 36),
+              visualDensity: VisualDensity.compact,
               onPressed: _selectedWeek < widget.config.totalWeeks
                   ? () => _jumpToWeek(_selectedWeek + 1)
                   : null,
@@ -238,6 +255,11 @@ class _WeekPageState extends State<WeekPage> {
           if (_selectedWeek != currentWeek)
             TextButton(
               onPressed: () => _jumpToWeek(currentWeek),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               child: const Text('回本周'),
             ),
           IconButton(
@@ -289,13 +311,13 @@ class _WeekPageState extends State<WeekPage> {
                                     final primary = group.first;
                                     final top = (primary.startSection - 1) *
                                             _sectionHeight +
-                                        2;
+                                        1.5;
                                     final height =
                                         primary.sectionCount * _sectionHeight -
-                                            4;
+                                            3;
                                     final left =
-                                        (primary.weekday - 1) * dayWidth + 2;
-                                    final width = dayWidth - 4;
+                                        (primary.weekday - 1) * dayWidth + 1;
+                                    final width = dayWidth - 2;
 
                                     return Positioned(
                                       top: top,

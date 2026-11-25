@@ -127,21 +127,17 @@ class _WebImportPageState extends State<WebImportPage> {
   Future<({String xnm, String xqm})?> _pickZfTerm(
     ({List<String> xnm, List<String> xqm, String selXnm, String selXqm}) zf,
   ) async {
-    final years = zf.xnm.toSet().toList()..sort((a, b) => b.compareTo(a));
-    final order = ['3', '12', '16'];
-    final terms = zf.xqm.toSet().toList()
-      ..sort((a, b) => order.indexOf(a).compareTo(order.indexOf(b)));
-    final options = <({String xnm, String xqm})>[];
-    for (final y in years.take(3)) {
-      for (final q in terms) {
-        options.add((xnm: y, xqm: q));
-      }
-    }
+    final options = WebParserService.buildZfTermOptions(zf);
     if (options.isEmpty) return null;
 
+    final selXnm = zf.selXnm.trim();
+    final selXqm = zf.selXqm.trim();
     var selected = options.firstWhere(
-      (o) => o.xnm == zf.selXnm && o.xqm == zf.selXqm,
-      orElse: () => options.first,
+      (o) => o.xnm == selXnm && o.xqm == selXqm,
+      orElse: () => options.firstWhere(
+        (o) => o.xnm == selXnm,
+        orElse: () => options.first,
+      ),
     );
 
     return showDialog<({String xnm, String xqm})>(
@@ -158,6 +154,12 @@ class _WebImportPageState extends State<WebImportPage> {
                 final opt = options[idx];
                 final isSelected =
                     opt.xnm == selected.xnm && opt.xqm == selected.xqm;
+                final isPageCurrent =
+                    opt.xnm == selXnm && opt.xqm == selXqm;
+                final label = WebParserService.formatZfTermLabel(
+                  opt.xnm,
+                  opt.xqm,
+                );
                 return ListTile(
                   leading: Icon(
                     isSelected
@@ -167,7 +169,9 @@ class _WebImportPageState extends State<WebImportPage> {
                         ? Theme.of(context).colorScheme.primary
                         : null,
                   ),
-                  title: Text(WebParserService.formatZfTermLabel(opt.xnm, opt.xqm)),
+                  title: Text(
+                    isPageCurrent ? '$label（当前）' : label,
+                  ),
                   selected: isSelected,
                   onTap: () => setDialogState(() => selected = opt),
                 );

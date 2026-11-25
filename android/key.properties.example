@@ -1,0 +1,5 @@
+# 复制本文件为 android/key.properties 并填入你自己的签名信息（android/key.properties 已被 .gitignore 忽略，不会上传 Git）
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=release
+storeFile=D:/Develop/android/keystore/course_schedule_release.jks

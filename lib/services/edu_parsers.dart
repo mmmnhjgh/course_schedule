@@ -101,6 +101,19 @@ class EduParsers {
       if (a >= 1 && b >= a) return (start: a, end: b);
     }
 
+    // 兼容 "3,4" / "3、4" 逗号分隔节次
+    if (RegExp(r'^\d{1,2}(?:\s*[,，、]\s*\d{1,2})+$').hasMatch(s)) {
+      final nums = RegExp(r'\d{1,2}')
+          .allMatches(s)
+          .map((m) => int.parse(m.group(0)!))
+          .where((n) => n >= 1)
+          .toList()
+        ..sort();
+      if (nums.isNotEmpty) {
+        return (start: nums.first, end: nums.last);
+      }
+    }
+
     // 兼容正方常见 "0304"、"010203" 两位数字拼接节次
     if (RegExp(r'^\d{4,}$').hasMatch(s) && s.length.isEven) {
       final nums = <int>[];
@@ -401,10 +414,8 @@ class EduParsers {
     int maxWeeks = 20,
     int maxSections = 12,
   }) {
-    final tables = RegExp(r'<table\b[^>]*>[\s\S]*?<\/table>', caseSensitive: false)
-        .allMatches(html)
-        .map((m) => m.group(0)!)
-        .toList();
+    final tables = _extractHtmlTables(html);
+    EduParseResult? bestResult;
 
     for (final table in tables) {
       final matrix = _expandTableMatrix(table);
@@ -443,12 +454,15 @@ class EduParsers {
 
           final lines = rawCell
               .split('\n')
+              .expand((l) => _splitInlineLabels(l))
               .map((e) => e.trim())
               .where((e) => e.isNotEmpty)
               .toList();
           if (lines.isEmpty) continue;
 
-          final name = lines.first;
+          final name = lines.first
+              .replaceFirst(RegExp(r'^(课程名称?|科目)[:：]\s*'), '')
+              .trim();
           var weeksText = '';
           var location = '';
           var teacher = '';
@@ -467,7 +481,19 @@ class EduParsers {
 
           for (var k = 1; k < lines.length; k++) {
             final line = lines[k];
-            if (weeksText.isEmpty &&
+            if (RegExp(r'^(教师|老师|任课教师)[:：]').hasMatch(line)) {
+              teacher = line
+                  .replaceFirst(RegExp(r'^(教师|老师|任课教师)[:：]\s*'), '')
+                  .trim();
+            } else if (RegExp(r'^(地点|教室|上课地点)[:：]').hasMatch(line)) {
+              location = line
+                  .replaceFirst(RegExp(r'^(地点|教室|上课地点)[:：]\s*'), '')
+                  .trim();
+            } else if (RegExp(r'^(周次|周数)[:：]').hasMatch(line)) {
+              weeksText = line
+                  .replaceFirst(RegExp(r'^(周次|周数)[:：]\s*'), '')
+                  .trim();
+            } else if (weeksText.isEmpty &&
                 line.contains('周') &&
                 RegExp(r'\d').hasMatch(line)) {
               weeksText = line;
@@ -504,8 +530,9 @@ class EduParsers {
         }
       }
 
-      if (courses.isNotEmpty) {
-        return EduParseResult(
+      if (courses.isNotEmpty &&
+          (bestResult == null || courses.length > bestResult.courses.length)) {
+        bestResult = EduParseResult(
           courses: courses,
           warnings: warnings,
           sourceTag: 'genericHtml',
@@ -513,11 +540,30 @@ class EduParsers {
       }
     }
 
+    if (bestResult != null) return bestResult;
+
     return const EduParseResult(
       courses: [],
       warnings: ['页面中未匹配到包含星期表头的课表表格'],
       sourceTag: 'genericHtml',
     );
+  }
+
+  /// 按标签深度提取完整的 <table>...</table>，避免嵌套表格导致外层课表被提前截断
+  static List<String> _extractHtmlTables(String html) {
+    final tokenRe = RegExp(r'<(\/?)table\b[^>]*>', caseSensitive: false);
+    final starts = <int>[];
+    final tables = <String>[];
+    for (final m in tokenRe.allMatches(html)) {
+      final isClosing = m.group(1) == '/';
+      if (!isClosing) {
+        starts.add(m.start);
+      } else if (starts.isNotEmpty) {
+        final start = starts.removeLast();
+        tables.add(html.substring(start, m.end));
+      }
+    }
+    return tables;
   }
 
   /* ---------- 私有 HTML / 中文数字解析辅助 ---------- */
@@ -554,9 +600,23 @@ class EduParsers {
         .toList();
   }
 
+  static List<String> _splitInlineLabels(String line) {
+    final separated = line.replaceAllMapped(
+      RegExp(r'(?<!^)\s*(?=(?:教师|老师|任课教师|地点|教室|上课地点|周次|周数)[:：])'),
+      (_) => '\n',
+    );
+    return separated.split('\n');
+  }
+
   static List<String> _linesOfCell(String inner) {
     final text = inner
-        .replaceAll(RegExp(r'<br\s*\/?\s*>', caseSensitive: false), '\n')
+        .replaceAll(
+          RegExp(
+            r'<br\s*\/?\s*>|<\/?(?:p|div|li|tr|h[1-6])\b[^>]*>',
+            caseSensitive: false,
+          ),
+          '\n',
+        )
         .replaceAll(RegExp(r'<[^>]+>'), '')
         .replaceAll('&nbsp;', ' ')
         .replaceAll('&amp;', '&')

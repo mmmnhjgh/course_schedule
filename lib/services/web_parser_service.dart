@@ -35,10 +35,17 @@ class WebParserService {
   var xn = document.getElementById('xnm'), xq = document.getElementById('xqm');
   if (xn && xq && xn.tagName === 'SELECT' && xq.tagName === 'SELECT') {
     var opt = function(sel) {
-      return Array.prototype.map.call(sel.options, function(o) { return String(o.value || '').trim(); })
-        .filter(function(v) { return v !== ''; });
+      var out = [];
+      for (var i = 0; i < sel.options.length; i++) {
+        var o = sel.options[i];
+        var v = String(o.value || '').trim();
+        var t = String(o.text || '').trim();
+        if (!v || v === 'all' || /全部|请选择/.test(t)) continue;
+        out.push(v);
+      }
+      return out;
     };
-    r.zf = { xnm: opt(xn), xqm: opt(xq), selXnm: String(xn.value || ''), selXqm: String(xq.value || '') };
+    r.zf = { xnm: opt(xn), xqm: opt(xq), selXnm: String(xn.value || '').trim(), selXqm: String(xq.value || '').trim() };
   }
   var qzHit = function(d) {
     if (!d || !d.querySelector) return false;
@@ -70,10 +77,13 @@ class WebParserService {
     return '''
 (function() {
   try {
-    var p = location.pathname, i = p.indexOf('/jwglxt/');
-    var base = i >= 0 ? p.slice(0, i) : '';
+    var p = location.pathname;
+    var kbcxIdx = p.indexOf('/kbcx/');
+    var base = kbcxIdx >= 0 ? p.slice(0, kbcxIdx) : (p.indexOf('/jwglxt/') >= 0 ? p.slice(0, p.indexOf('/jwglxt/')) + '/jwglxt' : '');
+    var gm = (location.search || '').match(/[?&](gnmkdm=[^&]+)/);
+    var gnmk = gm ? gm[1] : 'gnmkdm=N253508';
     var xhr = new XMLHttpRequest();
-    xhr.open('POST', base + '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N253508', false);
+    xhr.open('POST', base + '/kbcx/xskbcx_cxXsgrkb.html?' + gnmk, false);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
     xhr.send(${jsonEncode(body)});
@@ -196,16 +206,83 @@ class WebParserService {
     );
   }
 
+  /// 根据网页探测到的正方学年/学期列表生成合理顺序的候选选项，优先围绕当前选中/当前年份
+  static List<({String xnm, String xqm})> buildZfTermOptions(
+    ({List<String> xnm, List<String> xqm, String selXnm, String selXqm}) zf, {
+    int? referenceYear,
+  }) {
+    final nowYear = referenceYear ?? DateTime.now().year;
+    final selXnm = zf.selXnm.trim();
+    final selXqm = zf.selXqm.trim();
+    final selYear = int.tryParse(selXnm);
+    final maxYear = selYear != null && selYear > nowYear ? selYear : nowYear;
+
+    final allYears = zf.xnm
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    if (selXnm.isNotEmpty && !allYears.contains(selXnm)) {
+      allYears.add(selXnm);
+    }
+    allYears.sort((a, b) {
+      final ai = int.tryParse(a);
+      final bi = int.tryParse(b);
+      if (ai != null && bi != null) return bi.compareTo(ai);
+      return b.compareTo(a);
+    });
+
+    var filteredYears = allYears.where((y) {
+      final yi = int.tryParse(y);
+      if (yi == null) return true;
+      return yi <= maxYear;
+    }).toList();
+    if (filteredYears.isEmpty) {
+      filteredYears = allYears;
+    }
+    final pickedYears = filteredYears.take(3).toList();
+    if (selXnm.isNotEmpty && !pickedYears.contains(selXnm)) {
+      pickedYears.insert(0, selXnm);
+    }
+
+    const order = ['3', '12', '16'];
+    int termRank(String q) {
+      final idx = order.indexOf(q);
+      return idx >= 0 ? idx : 99;
+    }
+
+    final terms = zf.xqm
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty && e != 'all')
+        .toSet()
+        .toList();
+    if (selXqm.isNotEmpty && selXqm != 'all' && !terms.contains(selXqm)) {
+      terms.add(selXqm);
+    }
+    terms.sort((a, b) => termRank(a).compareTo(termRank(b)));
+
+    final options = <({String xnm, String xqm})>[];
+    for (final y in pickedYears) {
+      for (final q in terms) {
+        options.add((xnm: y, xqm: q));
+      }
+    }
+    return options;
+  }
+
   /// 格式化正方学年学期标签，例如 "2026" + "3" -> "2026–2027 学年 第 1 学期"
   static String formatZfTermLabel(String xnm, String xqm) {
-    final year = int.tryParse(xnm);
-    final term = switch (xqm) {
+    final cleanXnm = xnm.trim();
+    final cleanXqm = xqm.trim();
+    final year = int.tryParse(cleanXnm);
+    final term = switch (cleanXqm) {
       '3' => '第 1 学期',
       '12' => '第 2 学期',
       '16' => '第 3 学期',
-      _ => '学期 $xqm',
+      '' => '默认学期',
+      _ => '学期 $cleanXqm',
     };
-    return year != null ? '$year–${year + 1} 学年 $term' : '$xnm $term';
+    return year != null ? '$year–${year + 1} 学年 $term' : '$cleanXnm $term';
   }
 
   static dynamic unwrapJsJson(String raw) {

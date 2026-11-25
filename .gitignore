@@ -46,3 +46,13 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Android release signing keys (never commit private keys to Git)
+android/key.properties
+android/**/*.jks
+android/**/*.keystore
+*.jks
+*.keystore
+
+# Local draft icon assets
+assets/icons/

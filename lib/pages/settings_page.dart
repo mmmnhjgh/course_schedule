@@ -16,6 +16,7 @@ class SettingsPage extends StatelessWidget {
   final ValueChanged<String> onRenameActiveProfile;
   final VoidCallback onDeleteActiveProfile;
   final ValueChanged<ScheduleConfig> onUpdateConfig;
+  final Future<void> Function(String widgetType) onRequestPinWidget;
   final VoidCallback onOpenWebImport;
   final VoidCallback onOpenAiImport;
   final VoidCallback onImportFile;
@@ -34,6 +35,7 @@ class SettingsPage extends StatelessWidget {
     required this.onRenameActiveProfile,
     required this.onDeleteActiveProfile,
     required this.onUpdateConfig,
+    required this.onRequestPinWidget,
     required this.onOpenWebImport,
     required this.onOpenAiImport,
     required this.onImportFile,
@@ -313,6 +315,75 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
+  void _showDesktopWidgetSheet(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '添加桌面小组件',
+                style: Theme.of(sheetCtx)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '自动随当前课表更新，优先展示尚未下课的课程，点击卡片直达「今日」页面。',
+                style: Theme.of(sheetCtx).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: _WidgetPreviewOptionCard(
+                      title: '今日课表 4×2 宽卡',
+                      subtitle: '日期周次 + 最多 4 门课网格',
+                      badge: '4×2',
+                      onTap: () {
+                        Navigator.of(sheetCtx).pop();
+                        onRequestPinWidget('wide');
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _WidgetPreviewOptionCard(
+                      title: '今日课表 2×2 小卡',
+                      subtitle: '当前/下节展开 + 紧接课程',
+                      badge: '2×2',
+                      onTap: () {
+                        Navigator.of(sheetCtx).pop();
+                        onRequestPinWidget('compact');
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '提示：如部分系统桌面拦截一键添加弹窗，也可长按桌面空白处 → 小组件 → 找到「轻课表」手动添加。',
+                style: Theme.of(sheetCtx).textTheme.bodySmall?.copyWith(
+                      fontSize: 11.5,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showExportDialog(BuildContext context) {
     final jsonText = onExportJson();
     showDialog<void>(
@@ -446,6 +517,13 @@ class SettingsPage extends StatelessWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showAppearanceDialog(context),
           ),
+          ListTile(
+            leading: const Icon(Icons.widgets_outlined),
+            title: const Text('桌面小组件'),
+            subtitle: const Text('添加 4×2 今日宽卡或 2×2 今日小卡到手机桌面'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showDesktopWidgetSheet(context),
+          ),
           const Divider(),
           const _SectionTitle('多源导入与分享'),
           ListTile(
@@ -486,10 +564,10 @@ class SettingsPage extends StatelessWidget {
             onTap: () => _showImportDialog(context),
           ),
           const Divider(),
-          const _SectionTitle('调试与体验'),
+          const _SectionTitle('示例与数据管理'),
           ListTile(
-            leading: const Icon(Icons.science_outlined),
-            title: const Text('填入示例测试课表'),
+            leading: const Icon(Icons.auto_stories_outlined),
+            title: const Text('填入示例体验课表'),
             subtitle: const Text('快速预览单双周、连续多节课与冲突效果'),
             onTap: onLoadSampleCourses,
           ),
@@ -519,7 +597,196 @@ class SettingsPage extends StatelessWidget {
               );
             },
           ),
+          const Divider(),
+          const _SectionTitle('关于与隐私'),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于轻课表'),
+            subtitle: const Text('v2.0.0 · 纯本地无广告课表应用'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showAboutDialog(context),
+          ),
+          ListTile(
+            leading: const Icon(Icons.verified_user_outlined),
+            title: const Text('本地隐私说明'),
+            subtitle: const Text('数据仅存于本机，不收集任何个人信息'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showPrivacyDialog(context),
+          ),
+          const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+
+  void _showAboutDialog(BuildContext context) {
+    const repoUrl = 'https://github.com/mmmnhjgh/course_schedule';
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.asset(
+                'assets/app_icon.png',
+                width: 60,
+                height: 60,
+                errorBuilder: (_, _, _) => const Icon(
+                  Icons.calendar_month,
+                  size: 56,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '轻课表',
+              style: Theme.of(dialogCtx)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '版本 v2.0.0',
+              style: Theme.of(dialogCtx).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '纯本地、无广告的 Flutter 安卓课表应用，支持教务网页导入、AI 转换、Excel/CSV/ICS 互通与桌面小组件。',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '包名：io.github.mmmnhjgh.courseschedule\n开源协议：MIT License',
+              textAlign: TextAlign.center,
+              style: Theme.of(dialogCtx).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(const ClipboardData(text: repoUrl));
+              if (dialogCtx.mounted) {
+                Navigator.of(dialogCtx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('已复制 GitHub 仓库地址')),
+                );
+              }
+            },
+            child: const Text('复制开源地址'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPrivacyDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('本地隐私说明'),
+        content: const Text(
+          '1. 纯本地存储：您的课表数据、作息时间及配置全部保存在本机存储中，本应用不设任何云端服务器，不收集、不上传任何个人信息。\n\n'
+          '2. 网络权限说明：仅在您主动使用「教务系统网页导入」打开学校教务官网登录查课时访问对应学校服务器，您的账号密码不会被本应用保存或传输至第三方。\n\n'
+          '3. 零广告无追踪：本应用不含任何广告 SDK、统计埋点或后台静默联网行为。',
+          style: TextStyle(fontSize: 13.5, height: 1.5),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('我知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WidgetPreviewOptionCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final String badge;
+  final VoidCallback onTap;
+
+  const _WidgetPreviewOptionCard({
+    required this.title,
+    required this.subtitle,
+    required this.badge,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.7),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    badge,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                Icon(
+                  Icons.add_circle_outline,
+                  size: 18,
+                  color: colorScheme.primary,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 11.5,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1,13 +1,17 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:course_schedule/main.dart';
 import 'package:course_schedule/models/course.dart';
 import 'package:course_schedule/models/schedule_config.dart';
+import 'package:course_schedule/models/schedule_profile.dart';
 import 'package:course_schedule/services/storage_service.dart';
 import 'package:course_schedule/services/web_parser_service.dart';
+import 'package:course_schedule/services/widget_sync_service.dart';
+import 'package:course_schedule/widgets/course_edit_sheet.dart';
 
 void main() {
   test('Course endSection, overlap, and formatWeeks work correctly', () {
@@ -111,6 +115,19 @@ void main() {
     expect(result.courses.length, 1);
     expect(result.courses.first.weeks, [1, 3, 5, 7]);
     expect(result.courses.first.location, '信息楼-301');
+
+    final zfOpts = WebParserService.buildZfTermOptions(
+      (
+        xnm: ['2031', '2030', '2029', '2026', '2025', '2024'],
+        xqm: ['', 'all', '16', '3', '12'],
+        selXnm: '2026',
+        selXqm: '3',
+      ),
+      referenceYear: 2026,
+    );
+    expect(zfOpts.first, (xnm: '2026', xqm: '3'));
+    expect(zfOpts.any((o) => o.xnm == '2031'), isFalse);
+    expect(zfOpts.any((o) => o.xqm.isEmpty || o.xqm == 'all'), isFalse);
   });
 
   test('StorageService migrates legacy v1 courses and supports JSON roundtrip',
@@ -154,5 +171,85 @@ void main() {
     expect(find.text('今日'), findsOneWidget);
     expect(find.text('周课表'), findsOneWidget);
     expect(find.text('设置'), findsOneWidget);
+  });
+
+  test('WidgetSyncService builds complete Android widget JSON payload', () {
+    final profile = ScheduleProfile(
+      id: 'p1',
+      name: '2026秋主修',
+      config: ScheduleConfig(
+        semesterStart: DateTime(2026, 9, 7),
+        totalWeeks: 18,
+        maxSections: 12,
+        sectionTimes: ScheduleConfig.defaultSectionTimes(),
+      ),
+      courses: const [
+        Course(
+          id: 'c1',
+          name: '模拟电子技术',
+          teacher: '魏红彦',
+          location: '本部综合楼302',
+          weekday: 2,
+          startSection: 1,
+          sectionCount: 2,
+          weeks: [1, 2, 3],
+          canceledWeeks: [2],
+          colorValue: 0xFF66BB6A,
+        ),
+      ],
+    );
+
+    final payload = WidgetSyncService.buildSyncPayload(profile);
+    expect(payload['semesterStartYmd'], '2026-09-07');
+    expect(payload['totalWeeks'], 18);
+    expect((payload['sectionTimes'] as List).length, 12);
+    final courses = payload['courses'] as List<dynamic>;
+    expect(courses.length, 1);
+    expect((courses.first as Map)['name'], '模拟电子技术');
+    expect((courses.first as Map)['canceledWeeks'], [2]);
+  });
+
+  testWidgets('CourseEditSheet shows live time preview and submits course',
+      (tester) async {
+    CourseEditResult? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                result = await showCourseEditSheet(
+                  context,
+                  initialWeekday: 1,
+                  initialStartSection: 1,
+                  totalWeeks: 20,
+                  maxSections: 12,
+                  sectionTimes: ScheduleConfig.defaultSectionTimes(),
+                );
+              },
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('周一 第 1-2 节 · 08:00 - 09:40'), findsOneWidget);
+    expect(find.text('确认添加'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextFormField).first, '电路分析');
+    await tester.tap(find.text('单周'));
+    await tester.pumpAndSettle();
+    expect(find.text('1-19周(单)'), findsOneWidget);
+
+    await tester.tap(find.text('确认添加'));
+    await tester.pumpAndSettle();
+
+    expect(result?.course?.name, '电路分析');
+    expect(result?.course?.weeks.length, 10);
+    expect(result?.course?.weeks.first, 1);
   });
 }
