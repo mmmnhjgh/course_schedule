@@ -40,20 +40,20 @@ jobs:
 
       # 第 4 步：如已配置正式签名 Secrets，则还原 keystore 与 key.properties
       - name: 配置正式版签名（可选）
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_B64" | base64 -d > android/release-keystore.jks
-          cat <<EOF > android/key.properties
-          storePassword=$STORE_PASS
-          keyPassword=$KEY_PASS
-          keyAlias=$KEY_ALIAS
-          storeFile=release-keystore.jks
-          EOF
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | tr -d '\r\n' | base64 -d > android/release-keystore.jks
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=release-keystore.jks\n' \
+              "$STORE_PASS" "$KEY_PASS" "$KEY_ALIAS" > android/key.properties
+            echo "已启用正式版签名配置"
+          else
+            echo "未配置 ANDROID_KEYSTORE_BASE64，将回退使用默认签名"
+          fi
 
       # 第 5 步：下载 Dart/Flutter 依赖包
       - name: 获取项目依赖
