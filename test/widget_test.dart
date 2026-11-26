@@ -156,13 +156,9 @@ void main() {
     expect(loaded.profiles.first.courses.length, 1);
     expect(loaded.profiles.first.courses.first.name, '线性代数');
 
-    final exported = storage.exportBackupJson(
-      courses: loaded.profiles.first.courses,
-      config: loaded.profiles.first.config,
-    );
-    final reimported = storage.importBackupJson(exported);
-    expect(reimported.courses.length, 1);
-    expect(reimported.courses.first.name, '线性代数');
+    final reimported = ScheduleLibrary.fromBackup(jsonDecode(loaded.encode()));
+    expect(reimported.profiles.single.courses.length, 1);
+    expect(reimported.profiles.single.courses.first.name, '线性代数');
   });
 
   testWidgets('CourseScheduleApp renders navigation tabs', (tester) async {
@@ -207,6 +203,8 @@ void main() {
           onImportJson: (_) {},
           onLoadSampleCourses: () {},
           onClearAllCourses: () {},
+          onRestoreBackup: () {},
+          onManageAdjustments: () {},
         ),
       ),
     );
@@ -269,10 +267,9 @@ void main() {
     expect(payload['semesterStartYmd'], '2026-09-07');
     expect(payload['totalWeeks'], 18);
     expect((payload['sectionTimes'] as List).length, 12);
-    final courses = payload['courses'] as List<dynamic>;
-    expect(courses.length, 1);
-    expect((courses.first as Map)['name'], '模拟电子技术');
-    expect((courses.first as Map)['canceledWeeks'], [2]);
+    final days = payload['days'] as Map<String, dynamic>;
+    expect(days.keys, ['2026-09-08', '2026-09-22']);
+    expect(days['2026-09-08'].single['name'], '模拟电子技术');
   });
 
   testWidgets('CourseEditSheet shows live time preview and submits course',

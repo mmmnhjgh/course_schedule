@@ -2,23 +2,31 @@ import 'package:material_ui/material_ui.dart';
 
 import '../models/course.dart';
 import '../models/schedule_config.dart';
+import '../models/schedule_profile.dart';
+import '../services/schedule_occurrences.dart';
 import '../widgets/course_card.dart';
 
 /// 周视图课表网格页面（支持左右滑动切周、周末隐藏、冲突角标与当前时间指示线）
 class WeekPage extends StatefulWidget {
-  final List<Course> courses;
-  final ScheduleConfig config;
-  final ValueChanged<List<Course>> onTapCourseGroup;
+  final ScheduleProfile profile;
+  final DateTime now;
+  final void Function(List<Course>, DateTime) onTapCourseGroup;
   final void Function(Course course, int week)? onLongPressCourse;
   final void Function(int weekday, int startSection) onTapEmptyCell;
+  final VoidCallback onImport;
+  final ValueChanged<DateTime> onAddMakeup;
+
+  ScheduleConfig get config => profile.config;
 
   const WeekPage({
     super.key,
-    required this.courses,
-    required this.config,
+    required this.profile,
+    required this.now,
     required this.onTapCourseGroup,
     this.onLongPressCourse,
     required this.onTapEmptyCell,
+    required this.onImport,
+    required this.onAddMakeup,
   });
 
   @override
@@ -37,7 +45,7 @@ class _WeekPageState extends State<WeekPage> {
   @override
   void initState() {
     super.initState();
-    _selectedWeek = widget.config.getCurrentWeek();
+    _selectedWeek = widget.config.getCurrentWeek(widget.now);
     _pageController = PageController(initialPage: _selectedWeek - 1);
   }
 
@@ -50,11 +58,18 @@ class _WeekPageState extends State<WeekPage> {
   @override
   void didUpdateWidget(covariant WeekPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_selectedWeek > widget.config.totalWeeks) {
-      _selectedWeek = widget.config.totalWeeks;
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(_selectedWeek - 1);
-      }
+    final previousWeek = oldWidget.config.teachingWeek(oldWidget.now);
+    final currentWeek = widget.config.teachingWeek(widget.now);
+    final next = previousWeek == _selectedWeek && currentWeek != null
+        ? currentWeek
+        : _selectedWeek.clamp(1, widget.config.totalWeeks);
+    if (next != _selectedWeek) {
+      _selectedWeek = next;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pageController.hasClients && _selectedWeek == next) {
+          _pageController.jumpToPage(next - 1);
+        }
+      });
     }
   }
 
@@ -71,7 +86,7 @@ class _WeekPageState extends State<WeekPage> {
   }
 
   void _pickWeek() {
-    final currentWeek = widget.config.getCurrentWeek();
+    final currentWeek = widget.config.teachingWeek(widget.now);
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -83,7 +98,7 @@ class _WeekPageState extends State<WeekPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '选择周次（当前为第 $currentWeek 周）',
+                currentWeek == null ? '选择周次' : '选择周次（当前为第 $currentWeek 周）',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 12),
@@ -112,11 +127,25 @@ class _WeekPageState extends State<WeekPage> {
   }
 
   /// 将某一周需要展示的课程按重叠时段分组（每组首元素为最优先展示的课程）
-  List<List<Course>> _buildDisplayGroups(int week, int dayCount) {
-    final visibleCourses = widget.courses.where((c) {
-      if (c.weekday < 1 || c.weekday > dayCount) return false;
-      return _showNonCurrentWeek || c.isActiveInWeek(week);
-    }).toList();
+  List<List<Course>> _buildDisplayGroups(
+    ScheduleOccurrences timetable,
+    int week,
+    int dayCount,
+  ) {
+    final visibleCourses = [
+      for (var day = 1; day <= dayCount; day++)
+        for (final occurrence in timetable.onDate(
+          widget.config.dateOf(week, day),
+          includeCanceled: true,
+        ))
+          occurrence.course,
+      if (_showNonCurrentWeek)
+        for (final course in widget.profile.courses)
+          if (course.weekday >= 1 &&
+              course.weekday <= dayCount &&
+              !course.isActiveInWeek(week))
+            course,
+    ];
 
     // 本周课程优先于非本周课程，同优先级按开始节次排序
     visibleCourses.sort((a, b) {
@@ -151,16 +180,17 @@ class _WeekPageState extends State<WeekPage> {
 
     final nowMin = now.hour * 60 + now.minute;
     for (var i = 0; i < maxSec && i < times.length; i++) {
-      final start = _toMinutes(times[i].start);
-      final end = _toMinutes(times[i].end);
+      final start = ScheduleConfig.clockMinutes(times[i].start);
+      final end = ScheduleConfig.clockMinutes(times[i].end);
+      if (start == null || end == null || end <= start) continue;
       if (nowMin < start) {
         if (i == 0) return null;
-        final prevEnd = _toMinutes(times[i - 1].end);
+        final prevEnd = ScheduleConfig.clockMinutes(times[i - 1].end) ?? nowMin;
         final ratio = ((nowMin - prevEnd) / (start - prevEnd).clamp(1, 999))
             .clamp(0.0, 1.0);
         return i * _sectionHeight - 2 + ratio * 2;
       }
-      if (nowMin <= end) {
+      if (nowMin < end) {
         final ratio = (nowMin - start) / (end - start).clamp(1, 999);
         return (i + ratio) * _sectionHeight;
       }
@@ -168,16 +198,12 @@ class _WeekPageState extends State<WeekPage> {
     return null;
   }
 
-  int _toMinutes(String hhmm) {
-    final parts = hhmm.split(':');
-    if (parts.length != 2) return 0;
-    return (int.tryParse(parts[0]) ?? 0) * 60 + (int.tryParse(parts[1]) ?? 0);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final currentWeek = widget.config.getCurrentWeek();
-    final now = DateTime.now();
+    final now = widget.now;
+    final currentWeek = widget.config.teachingWeek(now);
+    final semesterMessage = widget.config.semesterMessage(now);
+    final timetable = ScheduleOccurrences(widget.profile);
     final colorScheme = Theme.of(context).colorScheme;
     final dayCount = widget.config.showWeekend ? 7 : 5;
 
@@ -225,7 +251,8 @@ class _WeekPageState extends State<WeekPage> {
                         ],
                       ),
                       Text(
-                        _selectedWeek == currentWeek ? '本周' : '非本周',
+                        semesterMessage ??
+                            (_selectedWeek == currentWeek ? '本周' : '非本周'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -252,7 +279,7 @@ class _WeekPageState extends State<WeekPage> {
           ],
         ),
         actions: [
-          if (_selectedWeek != currentWeek)
+          if (currentWeek != null && _selectedWeek != currentWeek)
             TextButton(
               onPressed: () => _jumpToWeek(currentWeek),
               style: TextButton.styleFrom(
@@ -272,10 +299,24 @@ class _WeekPageState extends State<WeekPage> {
             onPressed: () =>
                 setState(() => _showNonCurrentWeek = !_showNonCurrentWeek),
           ),
-          IconButton(
+          PopupMenuButton<bool>(
             tooltip: '添加课程',
             icon: const Icon(Icons.add),
-            onPressed: () => widget.onTapEmptyCell(1, 1),
+            onSelected: (makeup) {
+              if (makeup) {
+                widget.onAddMakeup(
+                  _selectedWeek == currentWeek
+                      ? now
+                      : widget.config.dateOf(_selectedWeek, 1),
+                );
+              } else {
+                widget.onTapEmptyCell(1, 1);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: false, child: Text('添加课程')),
+              PopupMenuItem(value: true, child: Text('添加一次补课')),
+            ],
           ),
         ],
       ),
@@ -285,12 +326,22 @@ class _WeekPageState extends State<WeekPage> {
         onPageChanged: (index) => setState(() => _selectedWeek = index + 1),
         itemBuilder: (context, index) {
           final week = index + 1;
-          final groups = _buildDisplayGroups(week, dayCount);
-          final timeLineY =
-              week == currentWeek ? _currentTimeOffset(now) : null;
+          final groups = _buildDisplayGroups(timetable, week, dayCount);
+          final timeLineY = week == currentWeek
+              ? _currentTimeOffset(now)
+              : null;
 
           return Column(
             children: [
+              if (widget.profile.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: FilledButton.tonalIcon(
+                    onPressed: widget.onImport,
+                    icon: const Icon(Icons.file_download_outlined),
+                    label: const Text('导入课表'),
+                  ),
+                ),
               _buildWeekdayHeader(context, week, dayCount, now),
               const Divider(height: 1),
               Expanded(
@@ -331,10 +382,15 @@ class _WeekPageState extends State<WeekPage> {
                                         isCanceled:
                                             primary.isCanceledInWeek(week),
                                         conflictCount: group.length - 1,
-                                        onTap: () =>
-                                            widget.onTapCourseGroup(group),
-                                        onLongPress: widget.onLongPressCourse !=
-                                                null
+                                        onTap: () => widget.onTapCourseGroup(
+                                          group,
+                                          widget.config.dateOf(
+                                            week,
+                                            primary.weekday,
+                                          ),
+                                        ),
+                                        onLongPress:
+                                            widget.onLongPressCourse != null
                                             ? () => widget.onLongPressCourse!(
                                                   primary,
                                                   week,

@@ -2,9 +2,7 @@ package io.github.mmmnhjgh.courseschedule
 
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.view.View
 import android.widget.RemoteViews
 
@@ -15,34 +13,20 @@ class CourseWidgetCompactProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        updateWidgets(context, appWidgetManager, appWidgetIds)
+        CourseWidgetData.refreshAllWidgets(context)
     }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        when (intent.action) {
-            Intent.ACTION_DATE_CHANGED,
-            Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED,
-            CourseWidgetData.ACTION_WIDGET_REFRESH -> {
-                val manager = AppWidgetManager.getInstance(context)
-                val ids = manager.getAppWidgetIds(
-                    ComponentName(context, CourseWidgetCompactProvider::class.java)
-                )
-                if (ids.isNotEmpty()) {
-                    updateWidgets(context, manager, ids)
-                }
-            }
-        }
+    override fun onDisabled(context: Context) {
+        CourseWidgetData.refreshAllWidgets(context)
     }
 
     companion object {
         fun updateWidgets(
             context: Context,
             appWidgetManager: AppWidgetManager,
-            appWidgetIds: IntArray
+            appWidgetIds: IntArray,
+            snapshot: TodayWidgetSnapshot
         ) {
-            val snapshot = CourseWidgetData.loadTodaySnapshot(context)
             val openIntent = CourseWidgetData.createOpenTodayIntent(context)
 
             for (appWidgetId in appWidgetIds) {
@@ -59,7 +43,7 @@ class CourseWidgetCompactProvider : AppWidgetProvider() {
                 if (courses.isEmpty()) {
                     views.setViewVisibility(R.id.layout_compact_content, View.GONE)
                     views.setViewVisibility(R.id.tv_compact_empty, View.VISIBLE)
-                    val emptyText = when {
+                    val emptyText = snapshot.semesterMessage ?: when {
                         !snapshot.hasSyncedData -> "打开应用同步"
                         snapshot.totalTodayCount > 0 -> "今日课程已结束"
                         else -> "今日无课"

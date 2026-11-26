@@ -1,33 +1,38 @@
 import '../models/course.dart';
 
-/// 单条变更分类
-enum MergeItemKind {
-  added,
-  changed,
-  protectedKept,
-  removed,
+class ImportMatchConflict {
+  final int incomingIndex;
+  final Course incoming;
+  final Map<int, Course> candidates;
+
+  const ImportMatchConflict(this.incomingIndex, this.incoming, this.candidates);
 }
 
-/// 三方合并预览差异
+/// 三方合并预览差异。
 class ImportMergeDiff {
   final List<Course> added;
   final List<({Course oldCourse, Course updatedCourse})> changed;
   final List<Course> protectedKept;
   final List<Course> removed;
+  final List<ImportMatchConflict> conflicts;
   final int unchangedCount;
   final List<Course> incomingCourses;
+  final Map<int, Course> _changesByIndex;
+  final Set<int> _removedIndices;
 
-  const ImportMergeDiff({
+  const ImportMergeDiff._(
+    this._changesByIndex,
+    this._removedIndices, {
     required this.added,
     required this.changed,
     required this.protectedKept,
     required this.removed,
+    required this.conflicts,
     required this.unchangedCount,
     required this.incomingCourses,
   });
 }
 
-/// 落盘导入模式
 enum ImportApplyMode {
   smartMerge('智能合并（推荐）'),
   replaceAll('覆盖当前课表'),
@@ -37,124 +42,185 @@ enum ImportApplyMode {
   const ImportApplyMode(this.label);
 }
 
-/// 智能三方合并服务：保留手动课程与用户编辑过的导入课程
 class ImportMergeService {
-  static String _courseSignature(Course c) {
-    final sortedWeeks = [...c.weeks]..sort();
-    return '${c.weekday}:${c.startSection}-${c.endSection}:${sortedWeeks.join(",")}:${c.location}:${c.teacher}';
-  }
+  static String _name(Course course) =>
+      course.name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
-  /// 计算本次导入相对于现有课程的差异
+  static Object _signature(Course course) => (
+    course.identityKey,
+    course.weekday,
+    course.startSection,
+    course.sectionCount,
+    ([...course.weeks]..sort()).join(','),
+    course.location.trim(),
+  );
+
+  /// 所有精确配对先完成，再匹配变动的时段。null 选择表示保留旧课并新增。
   static ImportMergeDiff computeDiff(
     List<Course> existing,
-    List<Course> incoming,
-  ) {
-    final importedExisting =
-        existing.where((c) => c.source == 'import').toList();
-    final unmatchedExisting = [...importedExisting];
+    List<Course> incoming, {
+    Map<int, int?> choices = const {},
+  }) {
+    final oldIndices = {
+      for (var index = 0; index < existing.length; index++)
+        if (existing[index].source == 'import') index,
+    };
+    final newIndices = {
+      for (var index = 0; index < incoming.length; index++) index,
+    };
+    final pairs = <int, int>{};
 
-    final added = <Course>[];
-    final changed = <({Course oldCourse, Course updatedCourse})>[];
-    final protectedKept = <Course>[];
-    var unchangedCount = 0;
-
-    for (final inc in incoming) {
-      // 1. 优先按 identityKey + weekday + startSection 精确配对（解决同一门课一周上多次）
-      var matchIdx = unmatchedExisting.indexWhere(
-        (ex) =>
-            ex.identityKey == inc.identityKey &&
-            ex.weekday == inc.weekday &&
-            ex.startSection == inc.startSection,
-      );
-      // 2. 退回同 identityKey 配对
-      if (matchIdx < 0) {
-        matchIdx = unmatchedExisting.indexWhere(
-          (ex) => ex.identityKey == inc.identityKey,
-        );
+    void matchUnique(Object Function(Course) key) {
+      final oldGroups = <Object, List<int>>{};
+      final newGroups = <Object, List<int>>{};
+      for (final index in oldIndices) {
+        oldGroups.putIfAbsent(key(existing[index]), () => []).add(index);
       }
-      // 3. 退回仅课程名一致（老师可能变动或之前缺失）
-      if (matchIdx < 0) {
-        final incName = inc.name.trim().toLowerCase();
-        matchIdx = unmatchedExisting.indexWhere(
-          (ex) => ex.name.trim().toLowerCase() == incName,
-        );
+      for (final index in newIndices) {
+        newGroups.putIfAbsent(key(incoming[index]), () => []).add(index);
       }
-
-      if (matchIdx < 0) {
-        added.add(inc.copyWith(source: 'import'));
-        continue;
-      }
-
-      final old = unmatchedExisting.removeAt(matchIdx);
-      if (old.userEdited) {
-        protectedKept.add(old);
-        continue;
-      }
-
-      if (_courseSignature(old) == _courseSignature(inc)) {
-        unchangedCount++;
-      } else {
-        changed.add((
-          oldCourse: old,
-          updatedCourse: inc.copyWith(
-            id: old.id,
-            colorValue: old.colorValue,
-            note: old.note.isNotEmpty ? old.note : inc.note,
-            canceledWeeks: old.canceledWeeks,
-            source: 'import',
-          ),
-        ));
+      for (final entry in newGroups.entries) {
+        final oldGroup = oldGroups[entry.key];
+        if (oldGroup?.length == 1 && entry.value.length == 1) {
+          final oldIndex = oldGroup!.single;
+          final newIndex = entry.value.single;
+          pairs[newIndex] = oldIndex;
+          oldIndices.remove(oldIndex);
+          newIndices.remove(newIndex);
+        }
       }
     }
 
-    return ImportMergeDiff(
+    matchUnique(_signature);
+    matchUnique(
+      (course) => (course.identityKey, course.weekday, course.startSection),
+    );
+    matchUnique((course) => course.identityKey);
+    matchUnique(_name);
+
+    final candidates = {
+      for (final index in newIndices)
+        index: [
+          for (final oldIndex in oldIndices)
+            if (_name(existing[oldIndex]) == _name(incoming[index])) oldIndex,
+        ],
+    };
+    final retained = <int>{};
+    final explicitlyAdded = <int>{};
+    for (final entry in choices.entries) {
+      final options = candidates[entry.key];
+      if (options == null || options.isEmpty) continue;
+      final selected = entry.value;
+      if (selected == null) {
+        explicitlyAdded.add(entry.key);
+        retained.addAll(options);
+      } else if (options.contains(selected) && oldIndices.remove(selected)) {
+        pairs[entry.key] = selected;
+        newIndices.remove(entry.key);
+      }
+    }
+
+    final added = <Course>[];
+    final conflicts = <ImportMatchConflict>[];
+    for (final index in newIndices) {
+      final options = candidates[index]!;
+      if (options.isEmpty || explicitlyAdded.contains(index)) {
+        added.add(incoming[index]);
+      } else {
+        conflicts.add(
+          ImportMatchConflict(index, incoming[index], {
+            for (final oldIndex in options)
+              if (oldIndices.contains(oldIndex)) oldIndex: existing[oldIndex],
+          }),
+        );
+      }
+    }
+
+    final changed = <({Course oldCourse, Course updatedCourse})>[];
+    final protected = <Course>[];
+    final changesByIndex = <int, Course>{};
+    var unchanged = 0;
+    for (final entry in pairs.entries) {
+      final old = existing[entry.value];
+      final next = incoming[entry.key];
+      if (old.userEdited) {
+        protected.add(old);
+      } else if (_signature(old) == _signature(next)) {
+        unchanged++;
+      } else {
+        final updated = next.copyWith(
+          id: old.id,
+          colorValue: old.colorValue,
+          note: old.note.isNotEmpty ? old.note : next.note,
+          canceledWeeks: old.canceledWeeks,
+          source: 'import',
+        );
+        changesByIndex[entry.value] = updated;
+        changed.add((oldCourse: old, updatedCourse: updated));
+      }
+    }
+    final unresolvedCandidates = {
+      for (final conflict in conflicts) ...conflict.candidates.keys,
+    };
+    final removedIndices = <int>{};
+    for (final index in oldIndices) {
+      if (existing[index].userEdited) {
+        protected.add(existing[index]);
+      } else if (!retained.contains(index) &&
+          !unresolvedCandidates.contains(index)) {
+        removedIndices.add(index);
+      }
+    }
+    return ImportMergeDiff._(
+      changesByIndex,
+      removedIndices,
       added: added,
       changed: changed,
-      protectedKept: protectedKept,
-      removed: unmatchedExisting,
-      unchangedCount: unchangedCount,
+      protectedKept: protected,
+      removed: [for (final index in removedIndices) existing[index]],
+      conflicts: conflicts,
+      unchangedCount: unchanged,
       incomingCourses: incoming,
     );
   }
 
-  /// 按指定模式生成合并后的最终课程列表
   static List<Course> applyMerge({
     required List<Course> existing,
     required ImportMergeDiff diff,
     required ImportApplyMode mode,
     bool removeMissing = false,
+    Iterable<String> reservedIds = const [],
   }) {
-    if (mode == ImportApplyMode.replaceAll) {
-      return diff.incomingCourses
-          .map((c) => c.copyWith(source: 'import'))
-          .toList();
+    final List<Course> base;
+    final List<Course> additions;
+    switch (mode) {
+      case ImportApplyMode.replaceAll:
+        base = [];
+        additions = diff.incomingCourses;
+      case ImportApplyMode.appendAll:
+        base = [...existing];
+        additions = diff.incomingCourses;
+      case ImportApplyMode.smartMerge:
+        if (diff.conflicts.isNotEmpty) {
+          throw StateError('请先确认有歧义的课程配对');
+        }
+        base = [
+          for (var index = 0; index < existing.length; index++)
+            if (!removeMissing || !diff._removedIndices.contains(index))
+              diff._changesByIndex[index] ?? existing[index],
+        ];
+        additions = diff.added;
     }
 
-    if (mode == ImportApplyMode.appendAll) {
-      return [
-        ...existing,
-        ...diff.incomingCourses.map((c) => c.copyWith(source: 'import')),
-      ];
-    }
-
-    // 智能合并：保留全部手动课程 + 受保护课程 + 未变化导入课程 + 已更新导入课程 + 新增课程
-    final changedById = <String, Course>{
-      for (final pair in diff.changed) pair.oldCourse.id: pair.updatedCourse,
-    };
-    final removedIds = removeMissing
-        ? diff.removed.map((e) => e.id).toSet()
-        : <String>{};
-
-    final next = <Course>[];
-    for (final old in existing) {
-      if (removedIds.contains(old.id)) continue;
-      if (changedById.containsKey(old.id)) {
-        next.add(changedById[old.id]!);
-      } else {
-        next.add(old);
+    final ids = {...reservedIds, for (final course in base) course.id};
+    for (final course in additions) {
+      var id = course.id;
+      var suffix = 1;
+      while (!ids.add(id)) {
+        id = '${course.id}_import_${suffix++}';
       }
+      base.add(course.copyWith(id: id, source: 'import'));
     }
-    next.addAll(diff.added);
-    return next;
+    return base;
   }
 }

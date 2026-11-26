@@ -50,29 +50,78 @@ class ScheduleConfig {
     this.themeMode = 'system',
   });
 
-  /// 根据开学第 1 周的周一日期，计算指定日期（默认今天）属于第几周
+  static DateTime addCalendarDays(DateTime date, int days) =>
+      DateTime(date.year, date.month, date.day + days);
+
+  static String dateKey(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year.toString().padLeft(4, '0')}-$month-$day';
+  }
+
+  DateTime get firstMonday =>
+      addCalendarDays(semesterStart, 1 - semesterStart.weekday);
+
+  DateTime get endExclusive => addCalendarDays(firstMonday, totalWeeks * 7);
+
+  int daysFromFirstMonday(DateTime date) {
+    final monday = firstMonday;
+    return DateTime.utc(
+      date.year,
+      date.month,
+      date.day,
+    ).difference(DateTime.utc(monday.year, monday.month, monday.day)).inDays;
+  }
+
+  int? teachingWeek(DateTime date) {
+    final days = daysFromFirstMonday(date);
+    return days >= 0 && days < totalWeeks * 7 ? days ~/ 7 + 1 : null;
+  }
+
+  String? semesterMessage(DateTime date) {
+    final days = daysFromFirstMonday(date);
+    if (days < 0) return '学期未开始';
+    if (days >= totalWeeks * 7) return '学期已结束';
+    return null;
+  }
+
+  /// 周课表在学期外仍可从首周或末周开始浏览。
   int getCurrentWeek([DateTime? now]) {
-    final target = now ?? DateTime.now();
-    // 去掉时分秒，只比较年月日，避免跨天小时差导致少算 1 天
-    final todayDate = DateTime(target.year, target.month, target.day);
-    final startDate = DateTime(
-      semesterStart.year,
-      semesterStart.month,
-      semesterStart.day,
-    );
-    final diffDays = todayDate.difference(startDate).inDays;
-    final week = diffDays >= 0 ? (diffDays ~/ 7) + 1 : 1;
-    return week.clamp(1, totalWeeks);
+    final days = daysFromFirstMonday(now ?? DateTime.now());
+    return (days < 0 ? 1 : days ~/ 7 + 1).clamp(1, totalWeeks);
   }
 
   /// 获取某一周周几（1~7）对应的具体日期
-  DateTime dateOf(int week, int weekday) {
-    final startDate = DateTime(
-      semesterStart.year,
-      semesterStart.month,
-      semesterStart.day,
-    );
-    return startDate.add(Duration(days: (week - 1) * 7 + (weekday - 1)));
+  DateTime dateOf(int week, int weekday) =>
+      addCalendarDays(firstMonday, (week - 1) * 7 + weekday - 1);
+
+  static int? clockMinutes(String time) {
+    final parts = time.split(':');
+    if (parts.length != 2) return null;
+    final hours = int.tryParse(parts[0]);
+    final minutes = int.tryParse(parts[1]);
+    if (hours == null ||
+        minutes == null ||
+        hours < 0 ||
+        hours > 23 ||
+        minutes < 0 ||
+        minutes > 59) {
+      return null;
+    }
+    return hours * 60 + minutes;
+  }
+
+  ({int start, int end})? sectionMinutes(int startSection, int endSection) {
+    if (startSection < 1 ||
+        startSection > endSection ||
+        endSection > sectionTimes.length) {
+      return null;
+    }
+    final start = clockMinutes(sectionTimes[startSection - 1].start);
+    final end = clockMinutes(sectionTimes[endSection - 1].end);
+    return start != null && end != null && start < end
+        ? (start: start, end: end)
+        : null;
   }
 
   ScheduleConfig copyWith({
@@ -141,8 +190,7 @@ class ScheduleConfig {
 
   static DateTime _mondayOfThisWeek() {
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    return today.subtract(Duration(days: today.weekday - 1));
+    return addCalendarDays(now, 1 - now.weekday);
   }
 
   static List<SectionTime> defaultSectionTimes() {

@@ -7,20 +7,28 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/course.dart';
+import '../models/course_adjustment.dart';
 import '../models/schedule_config.dart';
+import '../models/schedule_profile.dart';
 import 'ai_import_service.dart';
 import 'edu_parsers.dart';
+import 'schedule_occurrences.dart';
 import 'storage_service.dart';
+
+typedef FileImportResult = ({ImportPayload? payload, ScheduleLibrary? backup});
 
 /// 多格式文件导入与日历分享服务（支持 .xlsx / .csv / .ics / .json）
 class FileImportService {
   /// 打开系统文件选择器并解析所选课表文件
-  static Future<ImportPayload?> pickAndParseFile({
+  static Future<FileImportResult?> pickAndParseFile({
     required ScheduleConfig currentConfig,
+    bool backupOnly = false,
   }) async {
     final picked = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['xlsx', 'csv', 'ics', 'json', 'txt'],
+      allowedExtensions: backupOnly
+          ? ['json', 'txt']
+          : ['xlsx', 'csv', 'ics', 'json', 'txt'],
     );
     if (picked.isEmpty) return null;
 
@@ -29,55 +37,77 @@ class FileImportService {
     if (bytes.isEmpty) {
       throw const FormatException('所选文件为空');
     }
+    if (backupOnly) {
+      final raw = jsonDecode(utf8.decode(bytes).trim());
+      return (payload: null, backup: ScheduleLibrary.fromBackup(raw));
+    }
 
     final ext = (file.extension ?? '').toLowerCase();
     if (ext == 'xlsx') {
-      return parseXlsxBytes(
-        bytes,
-        maxWeeks: currentConfig.totalWeeks,
-        maxSections: currentConfig.maxSections,
+      return (
+        payload: parseXlsxBytes(
+          bytes,
+          maxWeeks: currentConfig.totalWeeks,
+          maxSections: currentConfig.maxSections,
+        ),
+        backup: null,
       );
     }
 
-    final text = utf8.decode(bytes, allowMalformed: true);
+    final text = utf8.decode(bytes, allowMalformed: true).trimLeft();
     if (ext == 'ics' || text.trimLeft().startsWith('BEGIN:VCALENDAR')) {
-      return parseIcs(text, currentConfig);
+      return (payload: parseIcs(text, currentConfig), backup: null);
     }
     if (ext == 'json' ||
         text.trimLeft().startsWith('{') ||
         text.trimLeft().startsWith('[')) {
-      return _parseJsonFile(text);
+      return parseJsonInput(text, currentConfig);
     }
-    return parseCsv(
-      text,
-      maxWeeks: currentConfig.totalWeeks,
-      maxSections: currentConfig.maxSections,
+    return (
+      payload: parseCsv(
+        text,
+        maxWeeks: currentConfig.totalWeeks,
+        maxSections: currentConfig.maxSections,
+      ),
+      backup: null,
     );
   }
 
-  static ImportPayload _parseJsonFile(String text) {
+  static FileImportResult parseJsonInput(String text, ScheduleConfig config) {
     final trimmed = text.trim();
-    final decoded = jsonDecode(trimmed);
+    ImportPayload parseAi() => AiImportService.parseAiJson(
+      trimmed,
+      defaultMaxWeeks: config.totalWeeks,
+      maxSections: config.maxSections,
+    );
+
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(trimmed);
+    } on FormatException {
+      if (!trimmed.contains('"startNode"')) rethrow;
+      return (payload: parseAi(), backup: null);
+    }
     if (decoded is Map<String, dynamic> && decoded['courses'] is List) {
       final rawCourses = decoded['courses'] as List<dynamic>;
       final looksLikeAiSchema = rawCourses.isNotEmpty &&
           rawCourses.first is Map &&
           (rawCourses.first as Map).containsKey('startNode');
       if (looksLikeAiSchema) {
-        return AiImportService.parseAiJson(trimmed);
+        return (payload: parseAi(), backup: null);
       }
     }
 
-    final storage = StorageService();
-    final backup = storage.importBackupJson(trimmed);
-    return ImportPayload(
-      courses: backup.courses
-          .map((c) => c.copyWith(source: 'import'))
-          .toList(),
-      sourceLabel: 'JSON 备份文件',
-      semesterStart: backup.config?.semesterStart,
-      totalWeeks: backup.config?.totalWeeks,
-      sectionTimes: backup.config?.sectionTimes,
+    final backup = ScheduleLibrary.fromBackup(decoded);
+    if (ScheduleLibrary.isBackup(decoded)) {
+      return (payload: null, backup: backup);
+    }
+    return (
+      payload: ImportPayload(
+        courses: backup.profiles.single.courses,
+        sourceLabel: 'JSON 课表',
+      ),
+      backup: null,
     );
   }
 
@@ -339,7 +369,11 @@ class FileImportService {
     final cfg = embeddedConfig ?? currentConfig;
     final courses = <Course>[];
     final warnings = <String>[];
-    final bySlot = <String, ({Course base, Set<int> weekSet})>{};
+    final bySlot =
+        <
+          (String, int, int, int, String, String, int),
+          ({Course base, Set<int> weekSet})
+        >{};
 
     for (final ev in events) {
       if (ev.summary.isEmpty ||
@@ -368,7 +402,15 @@ class FileImportService {
       final colorVal = _parseHexColor(ev.colorHex) ??
           EduParsers.colorForName(ev.summary);
       final teacher = _extractTeacherFromDesc(ev.description, ev.location);
-      final key = '${ev.summary}|$weekday|${sec.start}-${sec.end}';
+      final key = (
+        ev.summary,
+        weekday,
+        sec.start,
+        sec.end,
+        teacher,
+        ev.location,
+        colorVal,
+      );
 
       if (bySlot.containsKey(key)) {
         bySlot[key]!.weekSet.addAll(weeks);
@@ -411,6 +453,7 @@ class FileImportService {
     required List<Course> courses,
     required ScheduleConfig config,
     String scheduleName = '轻课表',
+    List<CourseAdjustment> adjustments = const [],
   }) {
     final buf = StringBuffer();
     buf.writeln('BEGIN:VCALENDAR');
@@ -421,10 +464,10 @@ class FileImportService {
 
     final semesterMeta = jsonEncode({
       'name': scheduleName,
-      'startDate': _fmtYmd(config.semesterStart),
+      'startDate': _fmtYmd(config.firstMonday),
       'totalWeeks': config.totalWeeks,
       'timeGrid': List.generate(
-        config.maxSections.clamp(1, config.sectionTimes.length),
+        config.maxSections.clamp(0, config.sectionTimes.length),
         (i) => {
           'index': i + 1,
           'start': _hhmmToMinutes(config.sectionTimes[i].start),
@@ -434,43 +477,51 @@ class FileImportService {
     });
     buf.writeln('X-TT-SEMESTER:${_escapeIcs(semesterMeta)}');
 
-    for (final course in courses) {
-      final startIdx = course.startSection - 1;
-      final endIdx = course.endSection - 1;
-      if (startIdx < 0 ||
-          endIdx >= config.sectionTimes.length ||
-          course.weeks.isEmpty) {
-        continue;
-      }
-      final startHm = config.sectionTimes[startIdx].start.replaceAll(':', '');
-      final endHm = config.sectionTimes[endIdx].end.replaceAll(':', '');
+    final timetable = ScheduleOccurrences(
+      ScheduleProfile(
+        id: 'export',
+        name: scheduleName,
+        courses: courses,
+        config: config,
+        adjustments: adjustments,
+      ),
+    );
+    for (final occurrence in timetable.all) {
+      final course = occurrence.course;
+      final range = config.sectionMinutes(
+        course.startSection,
+        course.endSection,
+      );
+      if (range == null) continue;
+
+      final startHm = _formatIcsClock(range.start);
+      final endHm = _formatIcsClock(range.end);
       final colorHex =
           '#${(course.colorValue & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
-
-      for (final week in course.weeks) {
-        if (course.isCanceledInWeek(week)) continue;
-        final date = config.dateOf(week, course.weekday);
-        final ymd =
-            '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
-
-        buf.writeln('BEGIN:VEVENT');
-        buf.writeln('UID:${course.id}-w$week@qingkebiao');
-        buf.writeln('SUMMARY:${_escapeIcs(course.name)}');
-        buf.writeln('DTSTART:${ymd}T${startHm}00');
-        buf.writeln('DTEND:${ymd}T${endHm}00');
-        if (course.location.isNotEmpty) {
-          buf.writeln('LOCATION:${_escapeIcs(course.location)}');
-        }
-        final descParts = [
-          if (course.teacher.isNotEmpty) course.teacher,
-          if (course.note.isNotEmpty) course.note,
-        ];
-        if (descParts.isNotEmpty) {
-          buf.writeln('DESCRIPTION:${_escapeIcs(descParts.join('\\n'))}');
-        }
-        buf.writeln('X-TT-COLOR:$colorHex');
-        buf.writeln('END:VEVENT');
+      final ymd = ScheduleConfig.dateKey(occurrence.date).replaceAll('-', '');
+      final adjustment = occurrence.adjustment;
+      final source = adjustment != null && timetable.hasOriginal(adjustment)
+          ? adjustment
+          : null;
+      final week = config.teachingWeek(source?.originalDate ?? occurrence.date);
+      final identity = source?.originalCourseId ?? course.id;
+      buf.writeln('BEGIN:VEVENT');
+      buf.writeln('UID:$identity-w$week@qingkebiao');
+      buf.writeln('SUMMARY:${_escapeIcs(course.name)}');
+      buf.writeln('DTSTART:${ymd}T${startHm}00');
+      buf.writeln('DTEND:${ymd}T${endHm}00');
+      if (course.location.isNotEmpty) {
+        buf.writeln('LOCATION:${_escapeIcs(course.location)}');
       }
+      final description = [
+        if (course.teacher.isNotEmpty) course.teacher,
+        if (course.note.isNotEmpty) course.note,
+      ];
+      if (description.isNotEmpty) {
+        buf.writeln('DESCRIPTION:${_escapeIcs(description.join('\n'))}');
+      }
+      buf.writeln('X-TT-COLOR:$colorHex');
+      buf.writeln('END:VEVENT');
     }
 
     buf.writeln('END:VCALENDAR');
@@ -484,7 +535,8 @@ class FileImportService {
     required String shareSubject,
   }) async {
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$filename');
+    final safeName = filename.replaceAll(RegExp(r'[/\\\x00-\x1f]'), '_');
+    final file = File('${dir.path}/$safeName');
     await file.writeAsString(content, encoding: utf8);
     await SharePlus.instance.share(
       ShareParams(
@@ -538,7 +590,7 @@ class FileImportService {
     int endMin,
   ) {
     final times = cfg.sectionTimes;
-    final limit = cfg.maxSections.clamp(1, times.length);
+    final limit = cfg.maxSections.clamp(0, times.length);
     int? startSec;
     int? endSec;
 
@@ -562,14 +614,12 @@ class FileImportService {
     String rrule,
     List<String> exdates,
   ) {
-    final startDateOnly = DateTime(startDt.year, startDt.month, startDt.day);
-    final semStartOnly = DateTime(
-      cfg.semesterStart.year,
-      cfg.semesterStart.month,
-      cfg.semesterStart.day,
-    );
-    final diffDays = startDateOnly.difference(semStartOnly).inDays;
-    final w0 = (diffDays ~/ 7) + 1;
+    int signedWeek(DateTime date) {
+      final days = cfg.daysFromFirstMonday(date);
+      return (days < 0 ? days - 6 : days) ~/ 7 + 1;
+    }
+
+    final w0 = signedWeek(startDt);
 
     if (rrule.isEmpty) {
       return (w0 >= 1 && w0 <= cfg.totalWeeks) ? [w0] : [];
@@ -579,8 +629,7 @@ class FileImportService {
     for (final ex in exdates) {
       final dt = _parseIcsDateTime(ex);
       if (dt != null) {
-        final dOnly = DateTime(dt.year, dt.month, dt.day);
-        skipWeeks.add((dOnly.difference(semStartOnly).inDays ~/ 7) + 1);
+        skipWeeks.add(signedWeek(dt));
       }
     }
 
@@ -596,19 +645,25 @@ class FileImportService {
     }
 
     final interval = int.tryParse(parts['INTERVAL'] ?? '1') ?? 1;
+    if (interval < 1) return [];
     var count = parts['COUNT'] != null ? int.tryParse(parts['COUNT']!) : null;
     var untilWeek = cfg.totalWeeks;
     if (parts['UNTIL'] != null) {
       final u = _parseIcsDateTime(parts['UNTIL']!);
       if (u != null) {
-        final uOnly = DateTime(u.year, u.month, u.day);
-        untilWeek = ((uOnly.difference(semStartOnly).inDays ~/ 7) + 1)
-            .clamp(1, cfg.totalWeeks);
+        untilWeek = signedWeek(u).clamp(0, cfg.totalWeeks);
+        if (cfg.dateOf(untilWeek, startDt.weekday).isAfter(u)) untilWeek--;
       }
     }
 
     final weeks = <int>[];
-    for (var w = w0; w <= untilWeek && (count == null || count > 0); w += interval) {
+    final skipped = w0 < 1 ? (1 - w0 + interval - 1) ~/ interval : 0;
+    if (count != null) count -= skipped;
+    for (
+      var w = w0 + skipped * interval;
+      w <= untilWeek && (count == null || count > 0);
+      w += interval
+    ) {
       if (w >= 1 && w <= cfg.totalWeeks && !skipWeeks.contains(w)) {
         weeks.add(w);
       }
@@ -647,6 +702,12 @@ class FileImportService {
       if (t.isNotEmpty && t != location) return t;
     }
     return '';
+  }
+
+  static String _formatIcsClock(int minutes) {
+    final hours = (minutes ~/ 60).toString().padLeft(2, '0');
+    final remainder = (minutes % 60).toString().padLeft(2, '0');
+    return '$hours$remainder';
   }
 
   static int _hhmmToMinutes(String hhmm) {

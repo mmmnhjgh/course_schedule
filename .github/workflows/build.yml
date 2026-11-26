@@ -8,6 +8,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      signed_test:
+        description: '构建并校验可覆盖安装的测试包'
+        type: boolean
+        default: false
 
 # 允许自动创建 Release 并上传附件
 permissions:
@@ -41,16 +46,20 @@ jobs:
       # 第 4 步：如已配置正式签名 Secrets，则还原 keystore 与 key.properties
       - name: 配置正式版签名（可选）
         env:
+          REQUIRE_SIGNING: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.signed_test == true }}
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASS" ]; then
             echo "$KEYSTORE_B64" | tr -d '\r\n' | base64 -d > android/release-keystore.jks
             printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=release-keystore.jks\n' \
               "$STORE_PASS" "$KEY_PASS" "$KEY_ALIAS" > android/key.properties
             echo "已启用正式版签名配置"
+          elif [ "$REQUIRE_SIGNING" = "true" ]; then
+            echo "::error::缺少正式版签名配置"
+            exit 1
           else
             echo "未配置 ANDROID_KEYSTORE_BASE64，将回退使用默认签名"
           fi
@@ -76,6 +85,36 @@ jobs:
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release-apks/QingKeBiao-arm64-v8a.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release-apks/QingKeBiao-armeabi-v7a.apk
           cp build/app/outputs/flutter-apk/app-release.apk release-apks/QingKeBiao-universal.apk
+
+      - name: 校验安装包版本和正式签名
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.signed_test == true
+        run: |
+          IFS='+' read -r version_name version_code < <(sed -n 's/^version: *//p' pubspec.yaml)
+          if [[ ! "$version_code" =~ ^[0-9]+$ ]]; then
+            echo "::error::pubspec.yaml 缺少有效的内部版本号"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != "v$version_name" ]]; then
+            echo "::error::版本标签与 pubspec.yaml 不一致"
+            exit 1
+          fi
+          build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          signing_sha256=4e21d5e3f6ee29400503f78149781450dc778783a3298366a9bc9c3b6c229c22
+          package="package: name='io.github.mmmnhjgh.courseschedule' versionCode='$version_code' versionName='$version_name'"
+          for apk in release-apks/*.apk; do
+            badging=$("$build_tools/aapt2" dump badging "$apk")
+            if [[ "$badging" != "$package"* ]]; then
+              echo "::error::$apk 的包名或版本与本次构建不一致"
+              exit 1
+            fi
+            certificates=$("$build_tools/apksigner" verify --print-certs "$apk")
+            signer=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$certificates")
+            if [[ "$signer" != "$signing_sha256" ]]; then
+              echo "::error::$apk 与 v2.0.1 的生产签名不一致"
+              exit 1
+            fi
+            printf '%s 已校验\n' "$apk"
+          done
 
       # 第 9 步：将编好的 APK 保存到本次构建产物（Artifacts）供下载
       - name: 上传构建产物

@@ -1,9 +1,9 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../models/course.dart';
 import '../models/schedule_config.dart';
 import '../models/schedule_profile.dart';
+import '../services/file_import_service.dart';
 import '../widgets/course_edit_sheet.dart';
 import 'section_times_page.dart';
 
@@ -25,6 +25,8 @@ class SettingsPage extends StatelessWidget {
   final void Function(String jsonText) onImportJson;
   final VoidCallback onLoadSampleCourses;
   final VoidCallback onClearAllCourses;
+  final VoidCallback onRestoreBackup;
+  final VoidCallback onManageAdjustments;
 
   const SettingsPage({
     super.key,
@@ -44,10 +46,11 @@ class SettingsPage extends StatelessWidget {
     required this.onImportJson,
     required this.onLoadSampleCourses,
     required this.onClearAllCourses,
+    required this.onRestoreBackup,
+    required this.onManageAdjustments,
   });
 
   ScheduleConfig get _config => activeProfile.config;
-  List<Course> get _courses => activeProfile.courses;
 
   Future<void> _pickSemesterStart(BuildContext context) async {
     final picked = await showDatePicker(
@@ -59,7 +62,7 @@ class SettingsPage extends StatelessWidget {
     );
     if (picked == null) return;
 
-    final monday = picked.subtract(Duration(days: picked.weekday - 1));
+    final monday = ScheduleConfig.addCalendarDays(picked, 1 - picked.weekday);
     onUpdateConfig(_config.copyWith(semesterStart: monday));
   }
 
@@ -315,175 +318,94 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  void _showDesktopWidgetSheet(BuildContext context) {
-    var requesting = false;
-    String? requestMessage;
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => StatefulBuilder(
-        builder: (sheetContext, setSheetState) {
-          Future<void> requestPin(String type) async {
-            if (requesting) return;
-            setSheetState(() {
-              requesting = true;
-              requestMessage = '正在向系统桌面发送添加请求…';
-            });
-            final requested = await onRequestPinWidget(type);
-            if (!sheetContext.mounted) return;
-            setSheetState(() {
-              requesting = false;
-              requestMessage = requested
-                  ? '已发送添加请求。请在系统弹窗中确认。若没有弹窗，可以手动添加。'
-                  : '一键添加暂不可用，可以手动添加。';
-            });
-          }
-
-          final theme = Theme.of(sheetContext);
-          final message = requestMessage;
-          return SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '添加桌面小组件',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '自动随当前课表更新，优先展示尚未下课的课程，点击卡片直达「今日」页面。',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _WidgetPreviewOptionCard(
-                          title: '今日课表 4×2 宽卡',
-                          subtitle: '日期周次 + 最多 4 门课网格',
-                          badge: '4×2',
-                          onTap: requesting ? null : () => requestPin('wide'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _WidgetPreviewOptionCard(
-                          title: '今日课表 2×2 小卡',
-                          subtitle: '当前/下节展开 + 紧接课程',
-                          badge: '2×2',
-                          onTap: requesting ? null : () => requestPin('compact'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (message != null) ...[
-                    const SizedBox(height: 12),
-                    Semantics(
-                      liveRegion: true,
-                      child: Text(message, style: theme.textTheme.bodyMedium),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Text(
-                    '手动添加时，长按或双指捏合桌面空白处，进入「小组件」或「插件」，找到「轻课表」。'
-                    '如果进入 OPPO 或一加的「卡片中心」，将「全部卡片」滑到底，再点「插件」。',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   void _showExportDialog(BuildContext context) {
     final jsonText = onExportJson();
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('导出 JSON 备份'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              jsonText,
-              style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-            ),
-          ),
-        ),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('备份全部课表'),
+        content: Text('备份包含 ${profiles.length} 张课表、设置、停课和单次调课。'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('关闭'),
           ),
-          FilledButton.icon(
+          TextButton(
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: jsonText));
+              if (!dialogContext.mounted) return;
+              Navigator.of(dialogContext).pop();
               if (context.mounted) {
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('已复制课表备份 JSON 到剪贴板')),
-                );
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('已复制完整备份')));
               }
             },
-            icon: const Icon(Icons.copy),
-            label: const Text('复制全部'),
+            child: const Text('复制 JSON'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              try {
+                final date = ScheduleConfig.dateKey(DateTime.now());
+                await FileImportService.shareTextAsFile(
+                  filename: '轻课表备份-$date.json',
+                  content: jsonText,
+                  shareSubject: '轻课表完整备份',
+                );
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('备份文件导出失败，请重试')));
+                }
+              }
+            },
+            child: const Text('导出文件'),
           ),
         ],
       ),
     );
   }
 
-  void _showImportDialog(BuildContext context) {
-    final controller = TextEditingController();
-    showDialog<void>(
+  Future<void> _showImportDialog(BuildContext context) async {
+    var input = '';
+    final text = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('从 JSON 文本导入恢复'),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('粘贴 JSON 导入或恢复'),
         content: TextField(
-          controller: controller,
+          onChanged: (value) => input = value,
           maxLines: 8,
           decoration: const InputDecoration(
-            hintText: '粘贴之前导出的 JSON 文本...',
+            hintText: '粘贴课表 JSON 或完整备份',
             border: OutlineInputBorder(),
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('取消'),
           ),
           FilledButton(
             onPressed: () {
-              final text = controller.text.trim();
-              if (text.isEmpty) return;
-              Navigator.of(context).pop();
-              onImportJson(text);
+              if (input.trim().isNotEmpty) {
+                Navigator.of(dialogContext).pop(input.trim());
+              }
             },
-            child: const Text('导入'),
+            child: const Text('下一步'),
           ),
         ],
       ),
     );
+    if (text != null && context.mounted) onImportJson(text);
   }
 
   @override
   Widget build(BuildContext context) {
-    final start = _config.semesterStart;
-    final dateStr =
-        '${start.year}-${start.month.toString().padLeft(2, '0')}-${start.day.toString().padLeft(2, '0')}';
+    final dateStr = ScheduleConfig.dateKey(_config.firstMonday);
+    final now = DateTime.now();
+    final termStatus =
+        _config.semesterMessage(now) ?? '当前第 ${_config.teachingWeek(now)} 周';
 
     final themeLabel = switch (_config.themeMode) {
       'light' => '浅色模式',
@@ -506,7 +428,7 @@ class SettingsPage extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.calendar_month_outlined),
             title: const Text('第 1 周周一日期'),
-            subtitle: Text('$dateStr（当前第 ${_config.getCurrentWeek()} 周）'),
+            subtitle: Text('$dateStr（$termStatus）'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _pickSemesterStart(context),
           ),
@@ -546,7 +468,7 @@ class SettingsPage extends StatelessWidget {
             title: const Text('桌面小组件'),
             subtitle: const Text('添加 4×2 今日宽卡或 2×2 今日小卡到手机桌面'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _showDesktopWidgetSheet(context),
+            onTap: () => showDesktopWidgetSheet(context, onRequestPinWidget),
           ),
           const Divider(),
           const _SectionTitle('多源导入与分享'),
@@ -574,21 +496,33 @@ class SettingsPage extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.ios_share_outlined),
             title: const Text('分享 / 导出为 .ics 日历文件'),
-            subtitle: Text('当前课表共 ${_courses.length} 门课程，可发微信或导入系统日历'),
+            subtitle: const Text('按实际日期导出课程与补课'),
             onTap: onExportIcsShare,
           ),
           ListTile(
             leading: const Icon(Icons.upload_file_outlined),
-            title: const Text('复制 / 导出 JSON 备份'),
+            title: const Text('备份全部课表'),
             onTap: () => _showExportDialog(context),
           ),
           ListTile(
+            leading: const Icon(Icons.restore_outlined),
+            title: const Text('从文件恢复备份'),
+            subtitle: const Text('恢复为新档案，保留现有课表'),
+            onTap: onRestoreBackup,
+          ),
+          ListTile(
             leading: const Icon(Icons.download_outlined),
-            title: const Text('粘贴 JSON 文本导入'),
+            title: const Text('粘贴 JSON 导入或恢复'),
             onTap: () => _showImportDialog(context),
           ),
           const Divider(),
           const _SectionTitle('示例与数据管理'),
+          ListTile(
+            leading: const Icon(Icons.event_repeat_outlined),
+            title: const Text('单次调课与补课'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: onManageAdjustments,
+          ),
           ListTile(
             leading: const Icon(Icons.auto_stories_outlined),
             title: const Text('填入示例体验课表'),
@@ -626,7 +560,7 @@ class SettingsPage extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('关于轻课表'),
-            subtitle: const Text('v2.0.1 · 纯本地无广告课表应用'),
+            subtitle: const Text('v2.1.0 · 纯本地无广告课表应用'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showAboutDialog(context),
           ),
@@ -672,10 +606,7 @@ class SettingsPage extends StatelessWidget {
                   ?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
-            Text(
-              '版本 v2.0.1',
-              style: Theme.of(dialogCtx).textTheme.bodySmall,
-            ),
+            Text('版本 v2.1.0', style: Theme.of(dialogCtx).textTheme.bodySmall),
             const SizedBox(height: 12),
             const Text(
               '纯本地、无广告的 Flutter 安卓课表应用，支持教务网页导入、AI 转换、Excel/CSV/ICS 互通与桌面小组件。',
@@ -732,6 +663,102 @@ class SettingsPage extends StatelessWidget {
       ),
     );
   }
+}
+
+void showDesktopWidgetSheet(
+  BuildContext context,
+  Future<bool> Function(String) onRequestPinWidget,
+) {
+  var requesting = false;
+  String? requestMessage;
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (_) => StatefulBuilder(
+      builder: (sheetContext, setSheetState) {
+        Future<void> requestPin(String type) async {
+          if (requesting) return;
+          setSheetState(() {
+            requesting = true;
+            requestMessage = '正在向系统桌面发送添加请求…';
+          });
+          final requested = await onRequestPinWidget(type);
+          if (!sheetContext.mounted) return;
+          setSheetState(() {
+            requesting = false;
+            requestMessage = requested
+                ? '已发送添加请求。请在系统弹窗中确认。若没有弹窗，可以手动添加。'
+                : '一键添加暂不可用，可以手动添加。';
+          });
+        }
+
+        final theme = Theme.of(sheetContext);
+        final message = requestMessage;
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '添加桌面小组件',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '自动随当前课表更新，优先展示尚未下课的课程，点击卡片直达「今日」页面。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _WidgetPreviewOptionCard(
+                        title: '今日课表 4×2 宽卡',
+                        subtitle: '日期周次 + 最多 4 门课网格',
+                        badge: '4×2',
+                        onTap: requesting ? null : () => requestPin('wide'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _WidgetPreviewOptionCard(
+                        title: '今日课表 2×2 小卡',
+                        subtitle: '当前/下节展开 + 紧接课程',
+                        badge: '2×2',
+                        onTap: requesting ? null : () => requestPin('compact'),
+                      ),
+                    ),
+                  ],
+                ),
+                if (message != null) ...[
+                  const SizedBox(height: 12),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(message, style: theme.textTheme.bodyMedium),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Text(
+                  '手动添加时，长按或双指捏合桌面空白处，进入「小组件」或「插件」，找到「轻课表」。'
+                  '如果进入 OPPO 或一加的「卡片中心」，将「全部卡片」滑到底，再点「插件」。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }
 
 class _WidgetPreviewOptionCard extends StatelessWidget {

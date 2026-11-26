@@ -4,7 +4,9 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
+import '../models/schedule_config.dart';
 import '../models/schedule_profile.dart';
+import 'schedule_occurrences.dart';
 
 /// 负责将当前激活课表同步到 Android 原生桌面小组件，并支持一键添加小组件与卡片跳转
 class WidgetSyncService {
@@ -15,33 +17,24 @@ class WidgetSyncService {
 
   /// 构建发送给 Android 原生端的精简 JSON 数据
   static Map<String, dynamic> buildSyncPayload(ScheduleProfile profile) {
-    final s = profile.config.semesterStart;
-    final startYmd =
-        '${s.year.toString().padLeft(4, '0')}-${s.month.toString().padLeft(2, '0')}-${s.day.toString().padLeft(2, '0')}';
+    final config = profile.config;
+    final days = <String, List<Map<String, Object?>>>{};
+    for (final item in ScheduleOccurrences(profile).all) {
+      final course = item.course;
+      days.putIfAbsent(ScheduleConfig.dateKey(item.date), () => []).add({
+        'name': course.name,
+        'location': course.location,
+        'startSection': course.startSection,
+        'sectionCount': course.sectionCount,
+        'colorValue': course.colorValue,
+      });
+    }
     return {
-      'profileName': profile.name,
-      'semesterStartYmd': startYmd,
-      'totalWeeks': profile.config.totalWeeks,
-      'maxSections': profile.config.maxSections,
-      'sectionTimes': profile.config.sectionTimes
-          .map((t) => {'start': t.start, 'end': t.end})
-          .toList(),
-      'courses': profile.courses
-          .map(
-            (c) => {
-              'id': c.id,
-              'name': c.name,
-              'teacher': c.teacher,
-              'location': c.location,
-              'weekday': c.weekday,
-              'startSection': c.startSection,
-              'sectionCount': c.sectionCount,
-              'weeks': c.weeks,
-              'canceledWeeks': c.canceledWeeks,
-              'colorValue': c.colorValue,
-            },
-          )
-          .toList(),
+      'version': 2,
+      'semesterStartYmd': ScheduleConfig.dateKey(config.firstMonday),
+      'totalWeeks': config.totalWeeks,
+      'sectionTimes': config.sectionTimes.map((time) => time.toJson()).toList(),
+      'days': days,
     };
   }
 
@@ -58,6 +51,17 @@ class WidgetSyncService {
       // 测试环境或非 Android 平台静默跳过
     } on PlatformException {
       // 忽略原生通道异常，不影响主应用正常使用
+    }
+  }
+
+  static Future<void> refreshWidgets() async {
+    if (!_isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('refreshWidgets');
+    } on MissingPluginException {
+      // 桌面桥接可能尚未初始化。
+    } on PlatformException {
+      // 系统定时刷新可接续。
     }
   }
 
@@ -90,8 +94,12 @@ class WidgetSyncService {
   }
 
   /// 注册热启动监听：App 在后台时点击桌面小组件可切到指定标签页
-  static void setOnOpenTabListener(void Function(int tabIndex) onOpenTab) {
+  static void setOnOpenTabListener(void Function(int tabIndex)? onOpenTab) {
     if (!_isAndroid) return;
+    if (onOpenTab == null) {
+      _channel.setMethodCallHandler(null);
+      return;
+    }
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'openTab') {
         final tab = call.arguments;

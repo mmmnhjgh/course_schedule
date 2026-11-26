@@ -18,11 +18,18 @@ class CourseDetailDelete extends CourseDetailAction {
   const CourseDetailDelete(this.course);
 }
 
+class CourseDetailAdjust extends CourseDetailAction {
+  final Course course;
+  const CourseDetailAdjust(this.course);
+}
+
 /// 打开课程详情弹窗（支持同一时段有多门冲突课程时切换查看）
 Future<CourseDetailAction?> showCourseDetailSheet(
   BuildContext context, {
   required List<Course> courses,
   required ScheduleConfig config,
+  bool Function(Course)? canAdjust,
+  String? Function(Course)? adjustmentLabel,
 }) {
   return showModalBottomSheet<CourseDetailAction>(
     context: context,
@@ -32,6 +39,8 @@ Future<CourseDetailAction?> showCourseDetailSheet(
     builder: (context) => _CourseDetailSheet(
       courses: courses,
       config: config,
+      canAdjust: canAdjust,
+      adjustmentLabel: adjustmentLabel,
     ),
   );
 }
@@ -39,10 +48,14 @@ Future<CourseDetailAction?> showCourseDetailSheet(
 class _CourseDetailSheet extends StatefulWidget {
   final List<Course> courses;
   final ScheduleConfig config;
+  final bool Function(Course)? canAdjust;
+  final String? Function(Course)? adjustmentLabel;
 
   const _CourseDetailSheet({
     required this.courses,
     required this.config,
+    this.canAdjust,
+    this.adjustmentLabel,
   });
 
   @override
@@ -69,8 +82,9 @@ class _CourseDetailSheetState extends State<_CourseDetailSheet> {
     final course = widget.courses[_selectedIdx];
     final accent = Color(course.colorValue);
     final timeStr = _formatTimeRange(course);
+    final adjustment = widget.adjustmentLabel?.call(course);
 
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -155,6 +169,13 @@ class _CourseDetailSheetState extends State<_CourseDetailSheet> {
               value: course.note,
             ),
           const SizedBox(height: 20),
+          if (widget.canAdjust?.call(course) == true)
+            TextButton.icon(
+              onPressed: () =>
+                  Navigator.of(context).pop(CourseDetailAdjust(course)),
+              icon: const Icon(Icons.event_repeat_outlined),
+              label: const Text('只调整这一次'),
+            ),
           Row(
             children: [
               Expanded(
@@ -162,7 +183,14 @@ class _CourseDetailSheetState extends State<_CourseDetailSheet> {
                   onPressed: () =>
                       Navigator.of(context).pop(CourseDetailDelete(course)),
                   icon: const Icon(Icons.delete_outline, color: Colors.red),
-                  label: const Text('删除', style: TextStyle(color: Colors.red)),
+                  label: Text(
+                    adjustment == '调课'
+                        ? '撤销调课'
+                        : adjustment == '补课'
+                        ? '删除补课'
+                        : '删除',
+                    style: const TextStyle(color: Colors.red),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -172,7 +200,7 @@ class _CourseDetailSheetState extends State<_CourseDetailSheet> {
                   onPressed: () =>
                       Navigator.of(context).pop(CourseDetailEdit(course)),
                   icon: const Icon(Icons.edit_outlined),
-                  label: const Text('编辑课程'),
+                  label: Text(adjustment == null ? '编辑课程' : '编辑本次$adjustment'),
                 ),
               ),
             ],

@@ -1,5 +1,6 @@
 package io.github.mmmnhjgh.courseschedule
 
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
@@ -11,13 +12,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
 
 data class WidgetCourseItem(
     val name: String,
     val location: String,
-    val teacher: String,
     val startSection: Int,
-    val endSection: Int,
     val timeRange: String,
     val endMinutes: Int?,
     val colorValue: Int
@@ -26,7 +26,8 @@ data class WidgetCourseItem(
 data class TodayWidgetSnapshot(
     val dateLabel: String,
     val weekdayLabel: String,
-    val currentWeek: Int,
+    val currentWeek: Int?,
+    val semesterMessage: String?,
     val totalTodayCount: Int,
     val upcomingCourses: List<WidgetCourseItem>,
     val hasSyncedData: Boolean
@@ -50,20 +51,65 @@ object CourseWidgetData {
 
     fun refreshAllWidgets(context: Context) {
         val manager = AppWidgetManager.getInstance(context)
-
         val wideIds = manager.getAppWidgetIds(
             ComponentName(context, CourseWidgetWideProvider::class.java)
         )
-        if (wideIds.isNotEmpty()) {
-            CourseWidgetWideProvider.updateWidgets(context, manager, wideIds)
-        }
-
         val compactIds = manager.getAppWidgetIds(
             ComponentName(context, CourseWidgetCompactProvider::class.java)
         )
-        if (compactIds.isNotEmpty()) {
-            CourseWidgetCompactProvider.updateWidgets(context, manager, compactIds)
+        val now = Calendar.getInstance()
+        val snapshot = if (wideIds.isNotEmpty() || compactIds.isNotEmpty()) {
+            val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_PAYLOAD, null)
+            snapshotFor(raw, now)
+        } else {
+            null
         }
+        if (snapshot != null) {
+            if (wideIds.isNotEmpty()) {
+                CourseWidgetWideProvider.updateWidgets(context, manager, wideIds, snapshot)
+            }
+            if (compactIds.isNotEmpty()) {
+                CourseWidgetCompactProvider.updateWidgets(context, manager, compactIds, snapshot)
+            }
+        }
+        scheduleNextRefresh(context, now, snapshot)
+    }
+
+    private fun scheduleNextRefresh(
+        context: Context,
+        now: Calendar,
+        snapshot: TodayWidgetSnapshot?
+    ) {
+        val alarm = context.getSystemService(AlarmManager::class.java) ?: return
+        val intent = Intent(context, CourseWidgetRefreshReceiver::class.java)
+            .setAction(ACTION_WIDGET_REFRESH)
+        val pending = PendingIntent.getBroadcast(
+            context, 1002, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (snapshot?.hasSyncedData != true) {
+            alarm.cancel(pending)
+            return
+        }
+
+        val midnight = (now.clone() as Calendar).apply {
+            add(Calendar.DAY_OF_MONTH, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val nextEnd = snapshot.upcomingCourses.mapNotNull { it.endMinutes }.minOrNull()
+        val next = nextEnd?.let { minutes ->
+            (now.clone() as Calendar).apply {
+                set(Calendar.HOUR_OF_DAY, minutes / 60)
+                set(Calendar.MINUTE, minutes % 60)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis.takeIf { it > now.timeInMillis }
+        }
+        alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, minOf(next ?: midnight, midnight), pending)
     }
 
     fun createOpenTodayIntent(context: Context): PendingIntent {
@@ -93,143 +139,91 @@ object CourseWidgetData {
         return Color.rgb(r, g, b)
     }
 
-    fun loadTodaySnapshot(context: Context): TodayWidgetSnapshot {
-        val now = Calendar.getInstance()
+    internal fun snapshotFor(raw: String?, now: Calendar): TodayWidgetSnapshot {
+        val year = now.get(Calendar.YEAR)
         val month = now.get(Calendar.MONTH) + 1
         val day = now.get(Calendar.DAY_OF_MONTH)
         val dateLabel = String.format(Locale.US, "%d.%02d", month, day)
-        val todayWeekday = ((now.get(Calendar.DAY_OF_WEEK) + 5) % 7) + 1
-        val weekdayLabel = weekdayNames[(todayWeekday - 1).coerceIn(0, 6)]
+        val todayYmd = String.format(Locale.US, "%04d-%02d-%02d", year, month, day)
+        val weekday = ((now.get(Calendar.DAY_OF_WEEK) + 5) % 7) + 1
+        val weekdayLabel = weekdayNames[weekday - 1]
         val nowMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
-
-        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_PAYLOAD, null)
-        if (raw.isNullOrBlank()) {
-            return TodayWidgetSnapshot(
-                dateLabel = dateLabel,
-                weekdayLabel = weekdayLabel,
-                currentWeek = 1,
-                totalTodayCount = 0,
-                upcomingCourses = emptyList(),
-                hasSyncedData = false
-            )
-        }
+        val unsynced = TodayWidgetSnapshot(
+            dateLabel, weekdayLabel, null, null, 0, emptyList(), false
+        )
+        if (raw.isNullOrBlank()) return unsynced
 
         return try {
             val root = JSONObject(raw)
             val totalWeeks = root.optInt("totalWeeks", 20).coerceAtLeast(1)
-            val startYmd = root.optString("semesterStartYmd", "")
-            val currentWeek = computeCurrentWeek(now, startYmd, totalWeeks)
-
-            val sectionTimes = parseSectionTimes(root.optJSONArray("sectionTimes"))
-            val coursesJson = root.optJSONArray("courses") ?: JSONArray()
-
-            val todayCourses = mutableListOf<WidgetCourseItem>()
-            for (i in 0 until coursesJson.length()) {
-                val obj = coursesJson.optJSONObject(i) ?: continue
-                val weekday = obj.optInt("weekday", -1)
-                if (weekday != todayWeekday) continue
-
-                val weeks = parseIntSet(obj.optJSONArray("weeks"))
-                if (!weeks.contains(currentWeek)) continue
-
-                val canceled = parseIntSet(obj.optJSONArray("canceledWeeks"))
-                if (canceled.contains(currentWeek)) continue
-
-                val startSec = obj.optInt("startSection", 1).coerceAtLeast(1)
-                val count = obj.optInt("sectionCount", 1).coerceAtLeast(1)
-                val endSec = startSec + count - 1
-
-                val startClock = sectionTimes.getOrNull(startSec - 1)?.first
-                val endClock = sectionTimes.getOrNull(endSec - 1)?.second
-                val timeRange = if (!startClock.isNullOrEmpty() && !endClock.isNullOrEmpty()) {
-                    "$startClock - $endClock"
-                } else {
-                    "第$startSec-${endSec}节"
+            val offset = daysSinceFirstMonday(year, month, day, root.getString("semesterStartYmd"))
+            val semesterMessage = when {
+                offset < 0 -> "学期未开始"
+                offset.toLong() >= totalWeeks * 7L -> "学期已结束"
+                else -> null
+            }
+            if (semesterMessage != null) {
+                return TodayWidgetSnapshot(
+                    dateLabel, weekdayLabel, null, semesterMessage, 0, emptyList(), true
+                )
+            }
+            val week = offset / 7 + 1
+            val byDate = root.optInt("version", 1) >= 2
+            val courses = if (byDate) {
+                root.optJSONObject("days")?.optJSONArray(todayYmd)
+            } else {
+                root.optJSONArray("courses")
+            }
+            val times = root.optJSONArray("sectionTimes")
+            val today = mutableListOf<WidgetCourseItem>()
+            for (index in 0 until (courses?.length() ?: 0)) {
+                val item = courses?.optJSONObject(index) ?: continue
+                if (!byDate && (item.optInt("weekday") != weekday ||
+                        week !in parseIntSet(item.optJSONArray("weeks")) ||
+                        week in parseIntSet(item.optJSONArray("canceledWeeks")))) {
+                    continue
                 }
+                val start = item.optInt("startSection", 1).coerceAtLeast(1)
+                val end = start + item.optInt("sectionCount", 1).coerceAtLeast(1) - 1
+                val startClock = times?.optJSONObject(start - 1)?.optString("start")
+                val endClock = times?.optJSONObject(end - 1)?.optString("end")
+                val startMinutes = parseMinutes(startClock)
                 val endMinutes = parseMinutes(endClock)
-
-                val colorVal = obj.optLong("colorValue", 0xFF42A5F5L).toInt()
-                todayCourses.add(
+                val hasTime = startMinutes != null && endMinutes != null && startMinutes < endMinutes
+                today.add(
                     WidgetCourseItem(
-                        name = obj.optString("name", "").trim(),
-                        location = obj.optString("location", "").trim(),
-                        teacher = obj.optString("teacher", "").trim(),
-                        startSection = startSec,
-                        endSection = endSec,
-                        timeRange = timeRange,
-                        endMinutes = endMinutes,
-                        colorValue = colorVal
+                        name = item.optString("name"),
+                        location = item.optString("location"),
+                        startSection = start,
+                        timeRange = if (hasTime) "$startClock - $endClock" else "第$start-${end}节",
+                        endMinutes = if (hasTime) endMinutes else null,
+                        colorValue = item.optLong("colorValue", 0xFF42A5F5L).toInt()
                     )
                 )
             }
-
-            todayCourses.sortWith(compareBy<WidgetCourseItem> { it.startSection }.thenBy { it.name })
-
-            val upcoming = todayCourses.filter { item ->
-                item.endMinutes == null || item.endMinutes >= nowMinutes
-            }
-
-            TodayWidgetSnapshot(
-                dateLabel = dateLabel,
-                weekdayLabel = weekdayLabel,
-                currentWeek = currentWeek,
-                totalTodayCount = todayCourses.size,
-                upcomingCourses = upcoming,
-                hasSyncedData = true
-            )
+            today.sortWith(compareBy<WidgetCourseItem> { it.startSection }.thenBy { it.name })
+            val upcoming = today.filter { it.endMinutes == null || it.endMinutes > nowMinutes }
+            TodayWidgetSnapshot(dateLabel, weekdayLabel, week, null, today.size, upcoming, true)
         } catch (_: Exception) {
-            TodayWidgetSnapshot(
-                dateLabel = dateLabel,
-                weekdayLabel = weekdayLabel,
-                currentWeek = 1,
-                totalTodayCount = 0,
-                upcomingCourses = emptyList(),
-                hasSyncedData = false
-            )
+            unsynced
         }
     }
 
-    private fun computeCurrentWeek(now: Calendar, startYmd: String, totalWeeks: Int): Int {
-        val parts = startYmd.split("-")
-        if (parts.size != 3) return 1
-        val year = parts[0].toIntOrNull() ?: return 1
-        val month = parts[1].toIntOrNull() ?: return 1
-        val day = parts[2].toIntOrNull() ?: return 1
-
-        val startCal = Calendar.getInstance().apply {
-            set(Calendar.YEAR, year)
-            set(Calendar.MONTH, month - 1)
-            set(Calendar.DAY_OF_MONTH, day)
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+    private fun daysSinceFirstMonday(year: Int, month: Int, day: Int, startYmd: String): Int {
+        val fields = startYmd.split('-')
+        require(fields.size == 3)
+        val utc = TimeZone.getTimeZone("UTC")
+        val monday = Calendar.getInstance(utc, Locale.US).apply {
+            clear()
+            isLenient = false
+            set(fields[0].toInt(), fields[1].toInt() - 1, fields[2].toInt())
+            add(Calendar.DAY_OF_MONTH, -((get(Calendar.DAY_OF_WEEK) + 5) % 7))
         }
-        val todayCal = Calendar.getInstance().apply {
-            set(Calendar.YEAR, now.get(Calendar.YEAR))
-            set(Calendar.MONTH, now.get(Calendar.MONTH))
-            set(Calendar.DAY_OF_MONTH, now.get(Calendar.DAY_OF_MONTH))
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+        val today = Calendar.getInstance(utc, Locale.US).apply {
+            clear()
+            set(year, month - 1, day)
         }
-
-        val diffMillis = todayCal.timeInMillis - startCal.timeInMillis
-        val diffDays = Math.round(diffMillis / 86_400_000.0).toInt()
-        val week = if (diffDays >= 0) (diffDays / 7) + 1 else 1
-        return week.coerceIn(1, totalWeeks)
-    }
-
-    private fun parseSectionTimes(array: JSONArray?): List<Pair<String, String>> {
-        if (array == null) return emptyList()
-        val list = mutableListOf<Pair<String, String>>()
-        for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
-            list.add(obj.optString("start", "") to obj.optString("end", ""))
-        }
-        return list
+        return ((today.timeInMillis - monday.timeInMillis) / 86_400_000L).toInt()
     }
 
     private fun parseIntSet(array: JSONArray?): Set<Int> {
@@ -247,6 +241,6 @@ object CourseWidgetData {
         if (parts.size != 2) return null
         val h = parts[0].toIntOrNull() ?: return null
         val m = parts[1].toIntOrNull() ?: return null
-        return h * 60 + m
+        return if (h in 0..23 && m in 0..59) h * 60 + m else null
     }
 }

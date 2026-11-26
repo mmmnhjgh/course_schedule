@@ -2,9 +2,7 @@ package io.github.mmmnhjgh.courseschedule
 
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.view.View
 import android.widget.RemoteViews
 
@@ -15,25 +13,11 @@ class CourseWidgetWideProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        updateWidgets(context, appWidgetManager, appWidgetIds)
+        CourseWidgetData.refreshAllWidgets(context)
     }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        when (intent.action) {
-            Intent.ACTION_DATE_CHANGED,
-            Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED,
-            CourseWidgetData.ACTION_WIDGET_REFRESH -> {
-                val manager = AppWidgetManager.getInstance(context)
-                val ids = manager.getAppWidgetIds(
-                    ComponentName(context, CourseWidgetWideProvider::class.java)
-                )
-                if (ids.isNotEmpty()) {
-                    updateWidgets(context, manager, ids)
-                }
-            }
-        }
+    override fun onDisabled(context: Context) {
+        CourseWidgetData.refreshAllWidgets(context)
     }
 
     companion object {
@@ -71,9 +55,9 @@ class CourseWidgetWideProvider : AppWidgetProvider() {
         fun updateWidgets(
             context: Context,
             appWidgetManager: AppWidgetManager,
-            appWidgetIds: IntArray
+            appWidgetIds: IntArray,
+            snapshot: TodayWidgetSnapshot
         ) {
-            val snapshot = CourseWidgetData.loadTodaySnapshot(context)
             val openIntent = CourseWidgetData.createOpenTodayIntent(context)
 
             for (appWidgetId in appWidgetIds) {
@@ -82,7 +66,8 @@ class CourseWidgetWideProvider : AppWidgetProvider() {
 
                 views.setTextViewText(
                     R.id.tv_wide_header_left,
-                    "${snapshot.dateLabel} ${snapshot.weekdayLabel} · 第${snapshot.currentWeek}周"
+                    snapshot.currentWeek?.let { "${snapshot.dateLabel} ${snapshot.weekdayLabel} · 第${it}周" }
+                        ?: "${snapshot.dateLabel} ${snapshot.weekdayLabel}"
                 )
                 views.setTextViewText(
                     R.id.tv_wide_header_right,
@@ -93,7 +78,7 @@ class CourseWidgetWideProvider : AppWidgetProvider() {
                 if (courses.isEmpty()) {
                     views.setViewVisibility(R.id.layout_wide_grid, View.GONE)
                     views.setViewVisibility(R.id.tv_wide_empty, View.VISIBLE)
-                    val emptyText = when {
+                    val emptyText = snapshot.semesterMessage ?: when {
                         !snapshot.hasSyncedData -> "打开「轻课表」同步课程"
                         snapshot.totalTodayCount > 0 -> "今日 ${snapshot.totalTodayCount} 节课已全部结束"
                         else -> "今日无课，好好休息"

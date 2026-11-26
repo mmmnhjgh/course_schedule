@@ -58,6 +58,11 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    "refreshWidgets" -> {
+                        CourseWidgetData.refreshAllWidgets(this)
+                        result.success(null)
+                    }
+
                     "requestPinWidget" -> {
                         val type = call.argument<String>("type") ?: "wide"
                         val ok = requestPinDesktopWidget(type)

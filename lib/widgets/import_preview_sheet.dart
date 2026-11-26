@@ -1,55 +1,40 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../models/course.dart';
+import '../models/schedule_profile.dart';
 import '../services/ai_import_service.dart';
 import '../services/import_merge_service.dart';
-
-/// 统一导入预览结果
-class ImportPreviewDecision {
-  final ImportApplyMode mode;
-  final bool removeMissing;
-  final bool applyImportedConfig;
-
-  const ImportPreviewDecision({
-    required this.mode,
-    required this.removeMissing,
-    required this.applyImportedConfig,
-  });
-}
+import '../services/schedule_occurrences.dart';
 
 /// 弹出三方合并预览确认窗（显示新增 / 变更 / 受保护 / 缺失，并支持选择合并模式）
-Future<ImportPreviewDecision?> showImportPreviewSheet(
+Future<ScheduleProfile?> showImportPreviewSheet(
   BuildContext context, {
   required ImportPayload payload,
-  required List<Course> existingCourses,
+  required ScheduleProfile profile,
 }) {
-  return showModalBottomSheet<ImportPreviewDecision>(
+  return showModalBottomSheet<ScheduleProfile>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
     showDragHandle: true,
-    builder: (context) => _ImportPreviewSheet(
-      payload: payload,
-      existingCourses: existingCourses,
-    ),
+    builder: (context) =>
+        _ImportPreviewSheet(payload: payload, profile: profile),
   );
 }
 
 class _ImportPreviewSheet extends StatefulWidget {
   final ImportPayload payload;
-  final List<Course> existingCourses;
+  final ScheduleProfile profile;
 
-  const _ImportPreviewSheet({
-    required this.payload,
-    required this.existingCourses,
-  });
+  const _ImportPreviewSheet({required this.payload, required this.profile});
 
   @override
   State<_ImportPreviewSheet> createState() => _ImportPreviewSheetState();
 }
 
 class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
-  late final ImportMergeDiff _diff;
+  late final ImportMergeDiff _initialDiff;
+  final _choices = <int, int?>{};
   ImportApplyMode _mode = ImportApplyMode.smartMerge;
   bool _removeMissing = false;
   bool _applyImportedConfig = true;
@@ -57,20 +42,55 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
   @override
   void initState() {
     super.initState();
-    _diff = ImportMergeService.computeDiff(
-      widget.existingCourses,
+    _initialDiff = ImportMergeService.computeDiff(
+      widget.profile.courses,
       widget.payload.courses,
     );
-    // 如果当前还没有任何课程，默认直接导入即可
-    if (widget.existingCourses.isEmpty) {
+    if (widget.profile.courses.isEmpty) {
       _mode = ImportApplyMode.replaceAll;
     }
+  }
+
+  ScheduleProfile _apply(ImportMergeDiff diff) {
+    final profile = widget.profile;
+    final payload = widget.payload;
+    final courses = ImportMergeService.applyMerge(
+      existing: profile.courses,
+      diff: diff,
+      mode: _mode,
+      removeMissing: _removeMissing,
+      reservedIds: profile.adjustments.map((item) => item.id),
+    );
+    final config = _applyImportedConfig
+        ? profile.config.copyWith(
+            semesterStart: payload.semesterStart,
+            totalWeeks: payload.totalWeeks,
+            maxSections: payload.sectionTimes?.length,
+            sectionTimes: payload.sectionTimes,
+          )
+        : profile.config;
+    return profile.copyWith(courses: courses, config: config);
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final hasExisting = widget.existingCourses.isNotEmpty;
+    final hasExisting = widget.profile.courses.isNotEmpty;
+    final merging = _mode == ImportApplyMode.smartMerge;
+    final diff = _choices.isEmpty
+        ? _initialDiff
+        : ImportMergeService.computeDiff(
+            widget.profile.courses,
+            widget.payload.courses,
+            choices: _choices,
+          );
+    final proposed = merging && diff.conflicts.isNotEmpty ? null : _apply(diff);
+    final occurrences = proposed == null ? null : ScheduleOccurrences(proposed);
+    final detached = {
+      if (occurrences != null)
+        for (final item in proposed!.adjustments)
+          if (item.isMove && !occurrences.hasOriginal(item)) item,
+    };
 
     return DraggableScrollableSheet(
       expand: false,
@@ -133,34 +153,34 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
                   runSpacing: 6,
                   children: [
                     _StatPill(
-                      label: '新增 ${_diff.added.length}',
+                      label: '新增 ${diff.added.length}',
                       color: Colors.green,
                     ),
                     _StatPill(
-                      label: '更新 ${_diff.changed.length}',
+                      label: '更新 ${diff.changed.length}',
                       color: Colors.orange,
                     ),
                     _StatPill(
-                      label: '保护手改 ${_diff.protectedKept.length}',
+                      label: '保护手改 ${diff.protectedKept.length}',
                       color: Colors.blue,
                     ),
                     _StatPill(
-                      label: '未变 ${_diff.unchangedCount}',
+                      label: '未变 ${diff.unchangedCount}',
                       color: Colors.grey,
                     ),
-                    if (_diff.removed.isNotEmpty)
+                    if (diff.removed.isNotEmpty)
                       _StatPill(
-                        label: '本次未出现 ${_diff.removed.length}',
+                        label: '本次未出现 ${diff.removed.length}',
                         color: Colors.red,
                       ),
                   ],
                 ),
-                if (_diff.removed.isNotEmpty)
+                if (diff.removed.isNotEmpty)
                   CheckboxListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     value: _removeMissing,
-                    title: Text('同时移除本次未出现的 ${_diff.removed.length} 门旧导入课'),
+                    title: Text('同时移除本次未出现的 ${diff.removed.length} 门旧导入课'),
                     onChanged: (v) =>
                         setState(() => _removeMissing = v ?? false),
                   ),
@@ -188,25 +208,37 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
             Expanded(
               child: ListView(
                 controller: scrollController,
-                children: _mode == ImportApplyMode.smartMerge && hasExisting
-                    ? _buildDiffList(context)
-                    : widget.payload.courses
-                        .map((c) => _CoursePreviewTile(course: c))
-                        .toList(),
+                children: [
+                  if (detached.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text('有 ${detached.length} 次调课的原安排已变动，将保留为独立补课。'),
+                    ),
+                  if (merging && hasExisting) ...[
+                    for (final conflict in _initialDiff.conflicts)
+                      _buildMatchChoice(conflict),
+                    ..._buildDiffList(diff),
+                  ] else
+                    for (final course in widget.payload.courses)
+                      _CoursePreviewTile(course: course),
+                ],
               ),
             ),
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: () => Navigator.of(context).pop(
-                  ImportPreviewDecision(
-                    mode: _mode,
-                    removeMissing: _removeMissing,
-                    applyImportedConfig: _applyImportedConfig,
-                  ),
-                ),
-                child: const Text('确认导入'),
+                onPressed: proposed == null
+                    ? null
+                    : () => Navigator.of(context).pop(
+                        proposed.copyWith(
+                          adjustments: [
+                            for (final item in proposed.adjustments)
+                              detached.contains(item) ? item.asMakeup() : item,
+                          ],
+                        ),
+                      ),
+                child: Text(proposed == null ? '请先确认课程配对' : '确认导入'),
               ),
             ),
           ],
@@ -215,12 +247,62 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
     );
   }
 
-  List<Widget> _buildDiffList(BuildContext context) {
-    final items = <Widget>[];
-    for (final c in _diff.added) {
-      items.add(_CoursePreviewTile(course: c, tag: '新增', tagColor: Colors.green));
+  Widget _buildMatchChoice(ImportMatchConflict conflict) {
+    final index = conflict.incomingIndex;
+    String slot(Course course) {
+      const days = ['一', '二', '三', '四', '五', '六', '日'];
+      final day = course.weekday >= 1 && course.weekday <= 7
+          ? '周${days[course.weekday - 1]}'
+          : '星期未识别';
+      return '$day 第 ${course.startSection}–${course.endSection} 节 · ${course.formatWeeks()}'
+          '${course.location.isEmpty ? '' : ' · ${course.location}'}';
     }
-    for (final pair in _diff.changed) {
+
+    final taken = {
+      for (final entry in _choices.entries)
+        if (entry.key != index) entry.value,
+    };
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${conflict.incoming.name} · ${slot(conflict.incoming)}'),
+          DropdownButton<int>(
+            isExpanded: true,
+            value: _choices.containsKey(index) ? _choices[index] ?? -1 : null,
+            hint: const Text('选择对应的旧课'),
+            items: [
+              for (final entry in conflict.candidates.entries)
+                if (!taken.contains(entry.key))
+                  DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(
+                      '匹配旧课 · ${slot(entry.value)}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              const DropdownMenuItem(value: -1, child: Text('作为新课加入，保留旧课')),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _choices[index] = value == -1 ? null : value);
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildDiffList(ImportMergeDiff diff) {
+    final items = <Widget>[];
+    for (final c in diff.added) {
+      items.add(
+        _CoursePreviewTile(course: c, tag: '新增', tagColor: Colors.green),
+      );
+    }
+    for (final pair in diff.changed) {
       items.add(
         _CoursePreviewTile(
           course: pair.updatedCourse,
@@ -229,7 +311,7 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
         ),
       );
     }
-    for (final c in _diff.protectedKept) {
+    for (final c in diff.protectedKept) {
       items.add(
         _CoursePreviewTile(
           course: c,
@@ -238,7 +320,7 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
         ),
       );
     }
-    for (final c in _diff.removed) {
+    for (final c in diff.removed) {
       items.add(
         _CoursePreviewTile(
           course: c,
@@ -247,7 +329,7 @@ class _ImportPreviewSheetState extends State<_ImportPreviewSheet> {
         ),
       );
     }
-    if (items.isEmpty) {
+    if (items.isEmpty && diff.conflicts.isEmpty) {
       items.add(
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 24),
