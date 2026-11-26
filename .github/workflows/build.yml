@@ -108,9 +108,15 @@ jobs:
               exit 1
             fi
             certificates=$("$build_tools/apksigner" verify --print-certs "$apk")
-            signer=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$certificates")
+            signer=$(awk '
+              /certificate SHA-256 digest: / && !/^[[:space:]]*[Ss]ource [Ss]tamp/ {
+                digest = tolower($NF)
+                if (length(digest) == 64 && digest !~ /[^0-9a-f]/) print digest
+              }
+            ' <<< "$certificates" | sort -u)
             if [[ "$signer" != "$signing_sha256" ]]; then
               echo "::error::$apk 与 v2.0.1 的生产签名不一致"
+              printf '检测到的 APK 证书 SHA-256 指纹\n%s\n' "$signer"
               exit 1
             fi
             printf '%s 已校验\n' "$apk"
